@@ -1,0 +1,31 @@
+def quicksort_1(lista) {
+    if (len(lista) <= 1) {
+        return lista;
+    }
+    
+    pivo = lista[0];
+    menores = [x for x in lista[1:] if x <= pivo];
+    maiores = [x for x in lista[1:] if x > pivo];
+    
+    return quicksort_1(menores) + [pivo] + quicksort_1(maiores);
+}
+def mergesort_1(lista) {
+    if (len(lista) <= 1) {
+        return lista;
+    }
+    
+    meio = len(lista) / 2;
+    metade_esq = mergesort_1(lista[:meio]);
+    metade_dir = mergesort_1(lista[meio:]);
+    
+    return intercala_1(metade_esq, metade_dir);
+}
+# Programa Principal
+print("Digite os elementos separados por espaco:");
+entrada = input();
+dados = split(entrada, " ");
+
+dados_ordenados = quicksort_1(dados);
+
+print("Resultado ordenado:");
+print(dados_ordenados);
