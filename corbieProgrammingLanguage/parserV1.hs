@@ -11,8 +11,10 @@ import System.Environment
 type SymbolTable = [(Token, Token)]
 
 symtable_insert :: (Token, Token) -> [(Token, Token)] -> [(Token, Token)]
-symtable_insert symbol [] = [symbol]
-symtable_insert symbol symtable = symtable ++ [symbol]
+symtable_insert symbol symtable = 
+   case symtable_lookup (fst symbol) symtable of 
+        Just _ -> error "variable already declared"
+        Nothing -> symbol: symtable
 
 symtable_update :: (Token, Token) -> [(Token, Token)] -> [(Token, Token)]
 symtable_update _ [] = fail "variable not found"
