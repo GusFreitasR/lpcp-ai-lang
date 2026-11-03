@@ -656,15 +656,12 @@ listCompBody = do
   e <- logicExpr
   forToken
   varTok <- idToken
-  inToken
+  inTok <- inToken
   src <- expr
   cond <- optionMaybe (ifToken >> logicExpr)
   closeBracketToken
-  updateState (symtable_insert_or_update (varTok, inTokenToVal inTok))
+  updateState (symtable_insert_or_update (varTok, inTok))
   return (ListCompExpr e (tokenName varTok) src cond)
-
-inTokenToVal :: Token -> Token
-inTokenToVal (Token p _) = Token p In
 
 normalListBody :: Parser Expr
 normalListBody = do
