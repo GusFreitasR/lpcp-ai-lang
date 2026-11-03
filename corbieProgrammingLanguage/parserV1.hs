@@ -58,7 +58,7 @@ data Stmt
   | PrintStmt Expr
   deriving (Eq, Show)
 
-data Assign = Assign Var AssignOp Expr
+data Assign = AssignNode Var AssignOp Expr
   deriving (Eq, Show)
 
 data AssignOp
@@ -406,7 +406,7 @@ assignParser = do
     LitExpr (BoolLit b)   -> return (Token (alexPos baseTok) (BoolLiteral b))
     _                     -> return (Token (alexPos baseTok) Assign)
   updateState (symtable_insert_or_update (baseTok, tokVal))
-  return (Assign v op e)
+  return (AssignNode v op e)
 
 alexPos :: Token -> AlexPosn
 alexPos (Token p _) = p
