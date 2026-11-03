@@ -13,7 +13,7 @@ type SymbolTable = [(Token, Token)]
 symtable_insert :: (Token, Token) -> [(Token, Token)] -> [(Token, Token)]
 symtable_insert symbol symtable = 
    case symtable_lookup (fst symbol) symtable of 
-        Just _ -> error "variable already declared"
+        Just _ -> fail "variable already declared"
         Nothing -> symbol: symtable
 
 symtable_update :: (Token, Token) -> [(Token, Token)] -> [(Token, Token)]
