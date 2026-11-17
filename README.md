@@ -65,15 +65,16 @@ Gere o scanner:
 alex scanner.x
 ```
 
-Compile e execute o parser:
+Compile e execute o parser modularizado:
 
 ```powershell
-ghc parserV0.hs scanner.hs -o parserV0.exe
-.\parserV0.exe
+ghc --make parser.hs Scanner.hs -o parser.exe
+.\parser.exe quickSortV1.pe
 ```
 
-O programa lê `programaV0.pe`, tokeniza seu conteúdo e imprime o resultado do
-parsing. Um exemplo válido é:
+O ponto de entrada `parser.hs` usa os módulos em `Parser\` para tokenizar o
+arquivo informado e imprimir o resultado do parsing. Um exemplo válido de
+programa simples é:
 
 ```text
 program main

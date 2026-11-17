@@ -1,0 +1,7 @@
+# Haskell build artifacts
+*.hi
+*.o
+*.dyn_hi
+*.dyn_o
+corbieProgrammingLanguage/parserV1
+parserV1
