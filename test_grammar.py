@@ -172,7 +172,7 @@ class Parser:
     def __init__(self, tokens):
         self.tokens = tokens
         self.pos = 0
-        self.symtable = []
+        self.symtable = [[]]
 
     def current(self):
         if self.pos < len(self.tokens):
@@ -194,34 +194,50 @@ class Parser:
             raise SyntaxError(f"Expected {cls} {val or ''}, got {cur} at token {self.pos}")
         return tok
 
-    def symtable_lookup(self, tok):
-        for t1, t2 in self.symtable:
+    def enter_scope(self):
+        self.symtable.insert(0, [])
+
+    def exit_scope(self):
+        if self.symtable:
+            self.symtable.pop(0)
+
+    def _lookup_in_scope(self, tok, scope):
+        for t1, t2 in scope:
             if t1.val == tok.val:
                 return (t1, t2)
         return None
 
+    def symtable_lookup(self, tok):
+        for scope in self.symtable:
+            found = self._lookup_in_scope(tok, scope)
+            if found:
+                return found
+        return None
+
     def symtable_insert(self, t1, t2):
-        self.symtable.append((t1, t2))
+        if not self.symtable:
+            self.symtable.append([(t1, t2)])
+            return
+        current = self.symtable[0]
+        if self._lookup_in_scope(t1, current):
+            raise Exception("variable already declared")
+        current.insert(0, (t1, t2))
 
     def symtable_update(self, t1, t2):
-        for idx, (tok1, tok2) in enumerate(self.symtable):
-            if tok1.val == t1.val:
-                self.symtable[idx] = (t1, t2)
-                return
+        for scope in self.symtable:
+            for idx, (tok1, tok2) in enumerate(scope):
+                if tok1.val == t1.val:
+                    scope[idx] = (t1, t2)
+                    return
         raise Exception("variable not found")
 
     def symtable_remove(self, t1, t2):
-        for idx, (tok1, tok2) in enumerate(self.symtable):
-            if tok1.val == t1.val:
-                del self.symtable[idx]
-                return
+        for scope in self.symtable:
+            for idx, (tok1, tok2) in enumerate(scope):
+                if tok1.val == t1.val:
+                    del scope[idx]
+                    return
         raise Exception("variable not found")
-
-    def symtable_insert_or_update(self, t1, t2):
-        if self.symtable_lookup(t1):
-            self.symtable_update(t1, t2)
-        else:
-            self.symtable_insert(t1, t2)
 
     def parse_program(self):
         stmts = []
@@ -231,10 +247,12 @@ class Parser:
 
     def parse_block(self):
         self.expect('OpenBrace')
+        self.enter_scope()
         stmts = []
         while self.current() and self.current().cls != 'CloseBrace':
             stmts.append(self.parse_stmt())
         self.expect('CloseBrace')
+        self.exit_scope()
         return stmts
 
     def parse_stmt(self):
@@ -324,10 +342,12 @@ class Parser:
         self.expect('CloseParen')
 
         self.symtable_insert(name_tok, def_tok)
+        self.enter_scope()
         for pt in param_toks:
             self.symtable_insert(pt, def_tok)
 
         body = self.parse_block()
+        self.exit_scope()
         return ('FuncDef', name_tok.val, [pt.val for pt in param_toks], body)
 
     def parse_if(self):
@@ -356,8 +376,10 @@ class Parser:
         self.expect('For')
         self.expect('OpenParen')
         save = self.pos
+        saved_symtable = [list(sc) for sc in self.symtable]
         # Try traditional for (assign ; logic ; assign)
         try:
+            self.enter_scope()
             init = self.parse_assign()
             self.expect('SemiColon')
             cond = self.parse_logic_expr()
@@ -365,15 +387,19 @@ class Parser:
             step = self.parse_assign()
             self.expect('CloseParen')
             body = self.parse_block()
+            self.exit_scope()
             return ('ForStmt', init, cond, step, body)
         except Exception:
             self.pos = save
+            self.symtable = saved_symtable
             var_tok = self.expect('Identifier')
             in_tok = self.expect('In')
             src = self.parse_expr()
             self.expect('CloseParen')
-            self.symtable_insert_or_update(var_tok, in_tok)
+            self.enter_scope()
+            self.symtable_insert(var_tok, in_tok)
             body = self.parse_block()
+            self.exit_scope()
             return ('ForInStmt', var_tok.val, src, body)
 
     def parse_return(self):
@@ -405,7 +431,13 @@ class Parser:
             raise SyntaxError(f"Expected assign op, got {self.current()}")
         e = self.parse_logic_expr()
         val_tok = Token(base_tok.pos, op)
-        self.symtable_insert_or_update(base_tok, val_tok)
+        if op == 'Assign':
+            if self.symtable_lookup(base_tok):
+                self.symtable_update(base_tok, val_tok)
+            else:
+                self.symtable_insert(base_tok, val_tok)
+        else:
+            self.symtable_update(base_tok, val_tok)
         return ('Assign', v, op, e)
 
     def parse_var(self):
@@ -571,21 +603,25 @@ class Parser:
                 return ('ListLit', [])
             # Could be list comprehension or list literal
             save = self.pos
+            saved_symtable = [list(sc) for sc in self.symtable]
             try:
                 first = self.parse_expr()
                 if self.match('For'):
+                    self.enter_scope()
                     var_tok = self.expect('Identifier')
                     in_tok = self.expect('In')
+                    self.symtable_insert(var_tok, in_tok)
                     src = self.parse_expr()
                     cond = None
                     if self.match('If'):
                         cond = self.parse_logic_expr()
                     self.expect('CloseBracket')
-                    self.symtable_insert_or_update(var_tok, in_tok)
+                    self.exit_scope()
                     return ('ListComp', first, var_tok.val, src, cond)
             except Exception:
                 pass
             self.pos = save
+            self.symtable = saved_symtable
             elems = [self.parse_expr()]
             while self.match('Comma'):
                 elems.append(self.parse_expr())
@@ -626,17 +662,18 @@ p1 = Parser(v1_toks)
 ast1 = p1.parse_program()
 print("\n=== quickSortV1 PARSED SUCCESSFULLY! ===")
 print(f"Total top-level AST nodes: {len(ast1)}")
-print("Symbol Table for quickSortV1:")
-for s in p1.symtable:
+print("Symbol Table (global scope) for quickSortV1:")
+for s in p1.symtable[0]:
     print(f"  {s[0]} -> {s[1]}")
+assert p1.symtable_lookup(Token("", "Identifier", "x")) is None, "List comprehension var 'x' leaked!"
 
 # Parse quickSortV2
 p2 = Parser(v2_toks)
 ast2 = p2.parse_program()
 print("\n=== quickSortV2 PARSED SUCCESSFULLY! ===")
 print(f"Total top-level AST nodes: {len(ast2)}")
-print("Symbol Table for quickSortV2:")
-for s in p2.symtable:
+print("Symbol Table (global scope) for quickSortV2:")
+for s in p2.symtable[0]:
     print(f"  {s[0]} -> {s[1]}")
 
 # ==================== EDGE CASE UNIT TESTS ====================
@@ -690,12 +727,18 @@ test_cases = [
         c = a @ b;
         s = "hello " cat "world";
         rem = 10 % 3;
+        w = 1;
+        loss = 100;
         w *= 2;
         loss /= 10;
     """),
     ("Enum single member", "enum Single { OnlyOne }"),
     ("Return without expr", "def stop() { return; }"),
-    ("While loop", "while (count > 0) { count -= 1; }")
+    ("While loop", "count = 5; while (count > 0) { count -= 1; }"),
+    ("Consecutive list comprehensions isolated scope", """
+        a = [x for x in lista if x < 5];
+        b = [x for x in lista if x >= 5];
+    """)
 ]
 
 for name, code in test_cases:
@@ -703,7 +746,9 @@ for name, code in test_cases:
         toks = scan(code)
         p = Parser(toks)
         ast = p.parse_program()
-        print(f"  PASS: {name} ({len(ast)} stmts, {len(p.symtable)} symbols)")
+        if name == "Consecutive list comprehensions isolated scope":
+            assert p.symtable_lookup(Token("", "Identifier", "x")) is None
+        print(f"  PASS: {name} ({len(ast)} stmts, {len(p.symtable[0])} global symbols)")
     except Exception as e:
         print(f"  FAIL: {name} -> {e}")
         sys.exit(1)
@@ -715,7 +760,8 @@ negative_cases = [
     ("Empty assignment RHS", "x = ;"),
     ("Disallowed var keyword", "var x : int = 10;"),
     ("Unterminated block", "def f() { x = 1;"),
-    ("Disallowed increment operator ++", "i++;")
+    ("Disallowed increment operator ++", "i++;"),
+    ("Duplicate const in same scope", "const DUP = 1; const DUP = 2;")
 ]
 
 for name, code in negative_cases:
