@@ -118,12 +118,14 @@ listCompBody :: Parser Expr
 listCompBody = do
   value <- logicExpr
   forToken
+  updateState enterScope
   varTok <- idToken
   inTok <- inToken
+  updateState (symtable_insert (varTok, inTok))
   source <- expr
   condition <- optionMaybe (ifToken >> logicExpr)
   closeBracketToken
-  updateState (symtable_insert_or_update (varTok, inTok))
+  updateState exitScope
   return (ListCompExpr value (tokenName varTok) source condition)
 
 normalListBody :: Parser Expr

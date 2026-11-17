@@ -3,7 +3,8 @@ module Parser.Types where
 import Scanner
 import Text.Parsec (ParsecT)
 
-type SymbolTable = [(Token, Token)]
+type Scope = [(Token, Token)]
+type SymbolTable = [Scope]
 type Parser a = ParsecT [Token] SymbolTable IO a
 
 data Program = Program [Stmt] deriving (Eq, Show)

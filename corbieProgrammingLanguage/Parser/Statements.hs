@@ -10,8 +10,10 @@ import Parser.Expressions
 block :: Parser [Stmt]
 block = do
   openBraceToken
+  updateState enterScope
   statements <- many stmt
   closeBraceToken
+  updateState exitScope
   return statements
 
 stmt :: Parser Stmt
@@ -33,8 +35,10 @@ funcDefStmt = do
   params <- sepBy idToken commaToken
   closeParenToken
   updateState (symtable_insert (nameTok, defTok))
+  updateState enterScope
   mapM_ (\param -> updateState (symtable_insert (param, defTok))) params
   body <- block
+  updateState exitScope
   return (FuncDefStmt (tokenName nameTok) (map tokenName params) body)
 
 ifStmt :: Parser Stmt
@@ -69,6 +73,7 @@ forStmt = do
 
 forTraditional :: Parser Stmt
 forTraditional = do
+  updateState enterScope
   initial <- assignParser
   semiColonToken
   condition <- logicExpr
@@ -76,6 +81,7 @@ forTraditional = do
   step <- assignParser
   closeParenToken
   body <- block
+  updateState exitScope
   return (ForStmt initial condition step body)
 
 forIn :: Parser Stmt
@@ -84,8 +90,10 @@ forIn = do
   inTok <- inToken
   source <- expr
   closeParenToken
-  updateState (symtable_insert_or_update (variable, inTok))
+  updateState enterScope
+  updateState (symtable_insert (variable, inTok))
   body <- block
+  updateState exitScope
   return (ForInStmt (tokenName variable) source body)
 
 assignStmt :: Parser Stmt
@@ -102,7 +110,12 @@ assignParser = do
         LitExpr (StringLit s) -> Token (alexPos baseTok) (StringLiteral s)
         LitExpr (BoolLit b) -> Token (alexPos baseTok) (BoolLiteral b)
         _ -> Token (alexPos baseTok) Assign
-  updateState (symtable_insert_or_update (baseTok, tokenValue))
+  symbols <- getState
+  case operation of
+    OpAssign -> case symtable_lookup baseTok symbols of
+      Just _ -> updateState (symtable_update (baseTok, tokenValue))
+      Nothing -> updateState (symtable_insert (baseTok, tokenValue))
+    _ -> updateState (symtable_update (baseTok, tokenValue))
   return (AssignNode variable operation value)
 
 alexPos (Token position _) = position

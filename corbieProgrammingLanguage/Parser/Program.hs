@@ -18,7 +18,7 @@ parser tokens =
     parsed <- program
     symbols <- getState
     return (parsed, symbols)
-  ) [] "Parsing error!" tokens
+  ) [[]] "Parsing error!" tokens
 
 runFile :: FilePath -> IO ()
 runFile filename = do
