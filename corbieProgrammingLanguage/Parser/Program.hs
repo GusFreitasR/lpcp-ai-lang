@@ -2,9 +2,9 @@ module Parser.Program where
 
 import Scanner
 import Text.Parsec
-import System.IO
 import Parser.Types
 import Parser.Statements
+import Parser.Semantic (initialSemanticState)
 
 program :: Parser Program
 program = do
@@ -16,9 +16,9 @@ parser :: [Token] -> IO (Either ParseError (Program, SymbolTable))
 parser tokens =
   runParserT (do
     parsed <- program
-    symbols <- getState
-    return (parsed, symbols)
-  ) [[]] "Parsing error!" tokens
+    st <- getState
+    return (parsed, symTable st)
+  ) initialSemanticState "Parsing error!" tokens
 
 runFile :: FilePath -> IO ()
 runFile filename = do
