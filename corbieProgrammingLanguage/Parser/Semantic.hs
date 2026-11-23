@@ -1,7 +1,8 @@
 module Parser.Semantic where
 
 import Scanner
-import Text.Parsec (getPosition, getState, modifyState, sourceColumn, sourceLine)
+import Text.Parsec (getPosition, getState, modifyState)
+import Text.Parsec.Pos (sourceColumn, sourceLine)
 import Parser.Types
 import Parser.SymbolTable
 
