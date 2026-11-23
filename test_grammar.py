@@ -167,12 +167,39 @@ with open(find_file("quickSortV2.pe")) as f:
     v2_toks = scan(f.read())
 print(f"quickSortV2 tokens scanned: {len(v2_toks)}")
 
-# Parser implementation mimicking Parsec combinators
+class SemanticError(Exception):
+    pass
+
+BUILTINS = {
+    "input":     (0, 1, "TDynamic"),
+    "len":       (1, 1, "TInt"),
+    "split":     (2, 2, "TList"),
+    "zeros":     (1, None, "TList"),
+    "ones":      (1, None, "TList"),
+    "reshape":   (2, 2, "TList"),
+    "dot":       (2, 2, "TDynamic"),
+    "to_int":    (1, 1, "TInt"),
+    "to_float":  (1, 1, "TFloat"),
+    "to_string": (1, 1, "TString"),
+    "to_bool":   (1, 1, "TBool"),
+    "int":       (1, 1, "TInt"),
+    "float":     (1, 1, "TFloat"),
+    "str":       (1, 1, "TString"),
+    "bool":      (1, 1, "TBool"),
+}
+
+# Parser + Semantic Analyzer mimicking Parsec combinators and ParserState
 class Parser:
     def __init__(self, tokens):
         self.tokens = tokens
         self.pos = 0
-        self.symtable = [[]]
+        self.symtable = []          # [(Token(..., 'escopo#nome'), Token)]
+        self.scope_stack = ["global"]
+        self.scope_counter = 0
+        self.var_types = {}
+        self.const_set = set()
+        self.func_sigs = dict(BUILTINS)
+        self.in_function = False
 
     def current(self):
         if self.pos < len(self.tokens):
@@ -194,50 +221,49 @@ class Parser:
             raise SyntaxError(f"Expected {cls} {val or ''}, got {cur} at token {self.pos}")
         return tok
 
-    def enter_scope(self):
-        self.symtable.insert(0, [])
+    def current_scope(self):
+        return self.scope_stack[0] if self.scope_stack else "global"
+
+    def enter_named_scope(self, name):
+        self.scope_stack.insert(0, name)
+
+    def enter_anon_scope(self, prefix):
+        self.scope_counter += 1
+        self.scope_stack.insert(0, f"{prefix}_{self.scope_counter}")
 
     def exit_scope(self):
-        if self.symtable:
-            self.symtable.pop(0)
+        if len(self.scope_stack) > 1:
+            self.scope_stack.pop(0)
 
-    def _lookup_in_scope(self, tok, scope):
-        for t1, t2 in scope:
-            if t1.val == tok.val:
-                return (t1, t2)
+    def symtable_lookup_scoped(self, name):
+        for scope in self.scope_stack:
+            key = f"{scope}#{name}"
+            for t1, t2 in self.symtable:
+                if t1.val == key:
+                    return (key, (t1, t2))
         return None
 
-    def symtable_lookup(self, tok):
-        for scope in self.symtable:
-            found = self._lookup_in_scope(tok, scope)
-            if found:
-                return found
-        return None
+    def symtable_insert_scoped(self, name_tok, val_tok, typ="TDynamic", is_const=False):
+        scope = self.current_scope()
+        key = f"{scope}#{name_tok.val}"
+        for t1, _ in self.symtable:
+            if t1.val == key:
+                raise SemanticError(f"variable already declared: {key}")
+        scoped_tok = Token(name_tok.pos, 'Identifier', key)
+        self.symtable.insert(0, (scoped_tok, val_tok))
+        self.var_types[key] = typ
+        if is_const:
+            self.const_set.add(key)
+        return key
 
-    def symtable_insert(self, t1, t2):
-        if not self.symtable:
-            self.symtable.append([(t1, t2)])
-            return
-        current = self.symtable[0]
-        if self._lookup_in_scope(t1, current):
-            raise Exception("variable already declared")
-        current.insert(0, (t1, t2))
-
-    def symtable_update(self, t1, t2):
-        for scope in self.symtable:
-            for idx, (tok1, tok2) in enumerate(scope):
-                if tok1.val == t1.val:
-                    scope[idx] = (t1, t2)
-                    return
-        raise Exception("variable not found")
-
-    def symtable_remove(self, t1, t2):
-        for scope in self.symtable:
-            for idx, (tok1, tok2) in enumerate(scope):
-                if tok1.val == t1.val:
-                    del scope[idx]
-                    return
-        raise Exception("variable not found")
+    def symtable_update_scoped(self, key, name_tok, val_tok, typ):
+        scoped_tok = Token(name_tok.pos, 'Identifier', key)
+        for idx, (t1, _) in enumerate(self.symtable):
+            if t1.val == key:
+                self.symtable[idx] = (scoped_tok, val_tok)
+                self.var_types[key] = typ
+                return
+        raise SemanticError(f"variable not found: {key}")
 
     def parse_program(self):
         stmts = []
@@ -245,9 +271,17 @@ class Parser:
             stmts.append(self.parse_stmt())
         return stmts
 
-    def parse_block(self):
+    def parse_block_stmts(self):
         self.expect('OpenBrace')
-        self.enter_scope()
+        stmts = []
+        while self.current() and self.current().cls != 'CloseBrace':
+            stmts.append(self.parse_stmt())
+        self.expect('CloseBrace')
+        return stmts
+
+    def parse_scoped_block(self, prefix):
+        self.expect('OpenBrace')
+        self.enter_anon_scope(prefix)
         stmts = []
         while self.current() and self.current().cls != 'CloseBrace':
             stmts.append(self.parse_stmt())
@@ -279,26 +313,41 @@ class Parser:
         elif tok.cls == 'Enum':
             return self.parse_enum()
         else:
-            # Could be assign or func_call
-            save = self.pos
-            try:
-                assign = self.parse_assign()
-                self.expect('SemiColon')
-                return ('AssignStmt', assign)
-            except Exception:
-                self.pos = save
+            next_tok = self.tokens[self.pos + 1] if self.pos + 1 < len(self.tokens) else None
+            if tok.cls == 'Identifier' and next_tok and next_tok.cls == 'OpenParen':
                 fc = self.parse_func_call()
                 self.expect('SemiColon')
+                self.check_func_call(fc[1], fc[2])
                 return ('FuncCallStmt', fc)
+            assign = self.parse_assign()
+            self.expect('SemiColon')
+            return ('AssignStmt', assign)
 
     def parse_const(self):
-        const_tok = self.expect('Const')
+        self.expect('Const')
         name_tok = self.expect('Identifier')
         self.expect('Assign')
         e, val_tok = self.parse_const_val()
         self.expect('SemiColon')
-        self.symtable_insert(name_tok, val_tok)
+        typ = self.check_const_expr(e)
+        self.symtable_insert_scoped(name_tok, val_tok, typ=typ, is_const=True)
         return ('ConstDecl', name_tok.val, e)
+
+    def check_const_expr(self, e):
+        kind = e[0]
+        if kind == 'LitExpr':
+            cls = e[1][0]
+            return {'IntLiteral': 'TInt', 'FloatLiteral': 'TFloat', 'StringLiteral': 'TString', 'BoolLiteral': 'TBool'}[cls]
+        if kind == 'VarExpr' and e[1][0] == 'SimpleVar':
+            ref = e[1][1]
+            found = self.symtable_lookup_scoped(ref)
+            if not found:
+                raise SemanticError(f"undeclared constant '{ref}'")
+            key, _ = found
+            if key not in self.const_set:
+                raise SemanticError(f"constant initializer '{ref}' is not a constant")
+            return self.var_types.get(key, 'TDynamic')
+        raise SemanticError("constant must be initialized with a literal or another constant")
 
     def parse_const_val(self):
         tok = self.current()
@@ -313,8 +362,10 @@ class Parser:
     def parse_model(self):
         model_tok = self.expect('Model')
         name_tok = self.expect('Identifier')
-        body = self.parse_block()
-        self.symtable_insert(name_tok, model_tok)
+        self.symtable_insert_scoped(name_tok, model_tok, typ=f"TModel:{name_tok.val}")
+        self.enter_named_scope(name_tok.val)
+        body = self.parse_block_stmts()
+        self.exit_scope()
         return ('ModelDef', name_tok.val, body)
 
     def parse_enum(self):
@@ -325,9 +376,10 @@ class Parser:
         while self.match('Comma'):
             members.append(self.expect('Identifier'))
         self.expect('CloseBrace')
-        self.symtable_insert(name_tok, enum_tok)
+        enum_t = f"TEnum:{name_tok.val}"
+        self.symtable_insert_scoped(name_tok, enum_tok, typ=enum_t, is_const=True)
         for m in members:
-            self.symtable_insert(m, enum_tok)
+            self.symtable_insert_scoped(m, enum_tok, typ=enum_t, is_const=True)
         return ('EnumDef', name_tok.val, [m.val for m in members])
 
     def parse_func_def(self):
@@ -341,13 +393,19 @@ class Parser:
                 param_toks.append(self.expect('Identifier'))
         self.expect('CloseParen')
 
-        self.symtable_insert(name_tok, def_tok)
-        self.enter_scope()
-        for pt in param_toks:
-            self.symtable_insert(pt, def_tok)
+        scoped_fn = f"{self.current_scope()}#{name_tok.val}"
+        self.symtable_insert_scoped(name_tok, def_tok, typ="TDynamic")
+        arity = len(param_toks)
+        self.func_sigs[scoped_fn] = (arity, arity, "TDynamic")
 
-        body = self.parse_block()
+        prev_in_func = self.in_function
+        self.in_function = True
+        self.enter_named_scope(name_tok.val)
+        for pt in param_toks:
+            self.symtable_insert_scoped(pt, def_tok, typ="TDynamic")
+        body = self.parse_block_stmts()
         self.exit_scope()
+        self.in_function = prev_in_func
         return ('FuncDef', name_tok.val, [pt.val for pt in param_toks], body)
 
     def parse_if(self):
@@ -355,13 +413,14 @@ class Parser:
         self.expect('OpenParen')
         cond = self.parse_logic_expr()
         self.expect('CloseParen')
-        then_b = self.parse_block()
+        self.check_bool_condition('if', self.eval_expr(cond))
+        then_b = self.parse_scoped_block('if')
         else_b = None
         if self.match('Else'):
             if self.current() and self.current().cls == 'If':
                 else_b = [self.parse_if()]
             else:
-                else_b = self.parse_block()
+                else_b = self.parse_scoped_block('else')
         return ('IfStmt', cond, then_b, else_b)
 
     def parse_while(self):
@@ -369,38 +428,40 @@ class Parser:
         self.expect('OpenParen')
         cond = self.parse_logic_expr()
         self.expect('CloseParen')
-        body = self.parse_block()
+        self.check_bool_condition('while', self.eval_expr(cond))
+        body = self.parse_scoped_block('while')
         return ('WhileStmt', cond, body)
 
     def parse_for(self):
         self.expect('For')
         self.expect('OpenParen')
-        save = self.pos
-        saved_symtable = [list(sc) for sc in self.symtable]
-        # Try traditional for (assign ; logic ; assign)
-        try:
-            self.enter_scope()
-            init = self.parse_assign()
-            self.expect('SemiColon')
-            cond = self.parse_logic_expr()
-            self.expect('SemiColon')
-            step = self.parse_assign()
-            self.expect('CloseParen')
-            body = self.parse_block()
-            self.exit_scope()
-            return ('ForStmt', init, cond, step, body)
-        except Exception:
-            self.pos = save
-            self.symtable = saved_symtable
+        t0 = self.current()
+        t1 = self.tokens[self.pos + 1] if self.pos + 1 < len(self.tokens) else None
+        if t0 and t0.cls == 'Identifier' and t1 and t1.cls == 'In':
             var_tok = self.expect('Identifier')
             in_tok = self.expect('In')
             src = self.parse_expr()
             self.expect('CloseParen')
-            self.enter_scope()
-            self.symtable_insert(var_tok, in_tok)
-            body = self.parse_block()
+            src_t = self.eval_expr(src)
+            if not self.is_iterable(src_t):
+                raise SemanticError(f"'for ... in' source must be iterable, got {src_t}")
+            self.enter_anon_scope('for')
+            self.symtable_insert_scoped(var_tok, in_tok, typ="TDynamic")
+            body = self.parse_block_stmts()
             self.exit_scope()
             return ('ForInStmt', var_tok.val, src, body)
+        else:
+            self.enter_anon_scope('for')
+            init = self.parse_assign()
+            self.expect('SemiColon')
+            cond = self.parse_logic_expr()
+            self.check_bool_condition('for', self.eval_expr(cond))
+            self.expect('SemiColon')
+            step = self.parse_assign()
+            self.expect('CloseParen')
+            body = self.parse_block_stmts()
+            self.exit_scope()
+            return ('ForStmt', init, cond, step, body)
 
     def parse_return(self):
         self.expect('Return')
@@ -408,6 +469,10 @@ class Parser:
         if self.current() and self.current().cls != 'SemiColon':
             val = self.parse_logic_expr()
         self.expect('SemiColon')
+        if not self.in_function:
+            raise SemanticError("'return' statement not allowed outside of a function")
+        if val is not None:
+            self.eval_expr(val)
         return ('ReturnStmt', val)
 
     def parse_print(self):
@@ -418,6 +483,7 @@ class Parser:
         e = self.parse_logic_expr()
         self.expect('CloseParen')
         self.expect('SemiColon')
+        self.eval_expr(e)
         return ('PrintStmt', e)
 
     def parse_assign(self):
@@ -430,15 +496,198 @@ class Parser:
         if not op:
             raise SyntaxError(f"Expected assign op, got {self.current()}")
         e = self.parse_logic_expr()
-        val_tok = Token(base_tok.pos, op)
-        if op == 'Assign':
-            if self.symtable_lookup(base_tok):
-                self.symtable_update(base_tok, val_tok)
-            else:
-                self.symtable_insert(base_tok, val_tok)
-        else:
-            self.symtable_update(base_tok, val_tok)
+        self.check_assign(base_tok, v, op, e)
         return ('Assign', v, op, e)
+
+    def check_assign(self, base_tok, v, op, rhs):
+        rhs_type = self.eval_expr(rhs)
+        val_tok = Token(base_tok.pos, op)
+        if v[0] == 'IndexVar':
+            key, _ = self.check_var_chain(v)
+            if key in self.const_set:
+                raise SemanticError(f"cannot mutate constant '{base_tok.val}'")
+            if op != 'Assign':
+                self.check_compound_compat(op, 'TDynamic', rhs_type)
+            return
+        found = self.symtable_lookup_scoped(base_tok.val)
+        if found:
+            key, _ = found
+            if key in self.const_set:
+                raise SemanticError(f"cannot assign to constant '{base_tok.val}'")
+            cur_type = self.var_types.get(key, 'TDynamic')
+            if op == 'Assign':
+                new_type = rhs_type
+            else:
+                self.check_compound_compat(op, cur_type, rhs_type)
+                new_type = self.combine_compound_type(op, cur_type, rhs_type)
+            self.symtable_update_scoped(key, base_tok, val_tok, new_type)
+        else:
+            if op != 'Assign':
+                raise SemanticError(f"undeclared variable '{base_tok.val}' in compound assignment")
+            self.symtable_insert_scoped(base_tok, val_tok, typ=rhs_type)
+
+    def check_compound_compat(self, op, lt, rt):
+        bin_map = {'PlusAssign': 'OpAdd', 'MinusAssign': 'OpSub', 'MultAssign': 'OpMul', 'DivAssign': 'OpDiv'}
+        self.eval_binary_type(bin_map[op], lt, rt)
+
+    def combine_compound_type(self, op, lt, rt):
+        if op == 'PlusAssign':
+            if lt == 'TInt' and rt == 'TInt': return 'TInt'
+            if (lt == 'TFloat' or rt == 'TFloat') and self.is_numeric(lt) and self.is_numeric(rt): return 'TFloat'
+            if lt == 'TString' and rt == 'TString': return 'TString'
+            if lt == 'TList' and rt == 'TList': return 'TList'
+        if op == 'DivAssign' and lt == 'TInt' and rt == 'TInt': return 'TInt'
+        if lt == 'TFloat' or rt == 'TFloat': return 'TFloat'
+        if lt == 'TInt' and rt == 'TInt': return 'TInt'
+        return 'TDynamic'
+
+    def lookup_func_sig(self, fn_name):
+        for scope in self.scope_stack:
+            key = f"{scope}#{fn_name}"
+            if key in self.func_sigs:
+                return self.func_sigs[key]
+        return self.func_sigs.get(fn_name)
+
+    def check_func_call(self, fn_name, args):
+        sig = self.lookup_func_sig(fn_name)
+        if not sig:
+            raise SemanticError(f"undeclared function '{fn_name}'")
+        arg_types = [self.eval_expr(a) for a in args]
+        min_a, max_a, ret_t = sig
+        if len(arg_types) < min_a or (max_a is not None and len(arg_types) > max_a):
+            raise SemanticError(f"function '{fn_name}' arity mismatch: expected ({min_a}, {max_a}), got {len(arg_types)}")
+        return ret_t
+
+    def check_var_chain(self, v):
+        if v[0] == 'SimpleVar':
+            name = v[1]
+            found = self.symtable_lookup_scoped(name)
+            if not found:
+                raise SemanticError(f"undeclared variable '{name}'")
+            key, _ = found
+            return (key, self.var_types.get(key, 'TDynamic'))
+        _, inner, slices = v
+        key, inner_t = self.check_var_chain(inner)
+        if inner_t not in ('TList', 'TString', 'TDict', 'TDynamic'):
+            raise SemanticError(f"type {inner_t} is not indexable")
+        for s in slices:
+            if s[0] == 'SliceSingle':
+                idx_t = self.eval_expr(s[1])
+                if inner_t == 'TDict':
+                    if idx_t not in ('TString', 'TInt', 'TDynamic'):
+                        raise SemanticError(f"invalid dict key type {idx_t}")
+                elif idx_t not in ('TInt', 'TDynamic'):
+                    raise SemanticError(f"index must be int, got {idx_t}")
+            else:
+                if inner_t == 'TDict':
+                    raise SemanticError("slicing with ':' not supported on dict")
+                for bound in (s[1], s[2]):
+                    if bound is not None:
+                        bt = self.eval_expr(bound)
+                        if bt not in ('TInt', 'TDynamic'):
+                            raise SemanticError(f"slice bound must be int, got {bt}")
+        return (key, 'TString' if inner_t == 'TString' else 'TDynamic')
+
+    def is_numeric(self, t):
+        return t in ('TInt', 'TFloat', 'TDynamic')
+
+    def is_iterable(self, t):
+        return t in ('TList', 'TString', 'TDict', 'TDynamic')
+
+    def check_bool_condition(self, ctx, t):
+        if t not in ('TBool', 'TDynamic'):
+            raise SemanticError(f"condition in '{ctx}' must be boolean, got {t}")
+
+    def eval_expr(self, e):
+        kind = e[0]
+        if kind == 'IntLit': return 'TInt'
+        if kind == 'FloatLit': return 'TFloat'
+        if kind == 'StringLit': return 'TString'
+        if kind == 'BoolLit': return 'TBool'
+        if kind == 'VarExpr':
+            return self.check_var_chain(e[1])[1]
+        if kind == 'FuncCallExpr':
+            _, fc = e
+            return self.check_func_call(fc[1], fc[2])
+        if kind == 'ListLit':
+            for elem in e[1]:
+                self.eval_expr(elem)
+            return 'TList'
+        if kind == 'DictLit':
+            for _, val in e[1]:
+                self.eval_expr(val)
+            return 'TDict'
+        if kind == 'ListComp':
+            _, val_expr, var_name, src_expr, cond_expr = e
+            src_t = self.eval_expr(src_expr)
+            if not self.is_iterable(src_t):
+                raise SemanticError(f"list comprehension source must be iterable, got {src_t}")
+            self.enter_anon_scope('lc')
+            var_tok = Token("", 'Identifier', var_name)
+            in_tok = Token("", 'In')
+            self.symtable_insert_scoped(var_tok, in_tok, typ='TDynamic')
+            self.eval_expr(val_expr)
+            if cond_expr is not None:
+                self.check_bool_condition('list comprehension', self.eval_expr(cond_expr))
+            self.exit_scope()
+            return 'TList'
+        if kind == 'UnaryOp':
+            _, op, sub = e
+            t = self.eval_expr(sub)
+            if op == 'OpNot':
+                if t not in ('TBool', 'TDynamic'):
+                    raise SemanticError(f"'not' requires boolean operand, got {t}")
+                return 'TBool'
+            if not self.is_numeric(t):
+                raise SemanticError(f"unary +/- requires numeric operand, got {t}")
+            return t
+        if kind == 'BinaryOp':
+            _, op, left, right = e
+            if op in ('OpDiv', 'OpMod') and right[0] in ('IntLit', 'FloatLit') and right[1] == 0:
+                raise SemanticError("division/modulo by zero")
+            lt = self.eval_expr(left)
+            rt = self.eval_expr(right)
+            return self.eval_binary_type(op, lt, rt)
+        return 'TDynamic'
+
+    def eval_binary_type(self, op, lt, rt):
+        if op in ('OpOr', 'OpAnd'):
+            if lt in ('TBool', 'TDynamic') and rt in ('TBool', 'TDynamic'):
+                return 'TBool'
+            raise SemanticError(f"logical '{op}' requires boolean operands, got {lt} and {rt}")
+        if op == 'In':
+            if not self.is_iterable(rt):
+                raise SemanticError(f"right operand of 'in' must be iterable, got {rt}")
+            return 'TBool'
+        if op in ('Equal', 'NotEqual'):
+            if lt == 'TDynamic' or rt == 'TDynamic' or (self.is_numeric(lt) and self.is_numeric(rt)) or lt == rt:
+                return 'TBool'
+            raise SemanticError(f"cannot compare incompatible types {lt} and {rt}")
+        if op in ('Less', 'LessEqual', 'Greater', 'GreaterEqual'):
+            if lt == 'TDynamic' or rt == 'TDynamic' or (self.is_numeric(lt) and self.is_numeric(rt)) or (lt == rt and lt in ('TString', 'TList')):
+                return 'TBool'
+            raise SemanticError(f"cannot order incompatible types {lt} and {rt}")
+        if op == 'OpAdd':
+            if lt == 'TDynamic' or rt == 'TDynamic':
+                return 'TList' if (lt == 'TList' or rt == 'TList') else 'TDynamic'
+            if lt == 'TInt' and rt == 'TInt': return 'TInt'
+            if self.is_numeric(lt) and self.is_numeric(rt): return 'TFloat'
+            if lt == 'TString' and rt == 'TString': return 'TString'
+            if lt == 'TList' and rt == 'TList': return 'TList'
+            raise SemanticError(f"incompatible types for '+': {lt} and {rt}")
+        if op == 'OpCat':
+            if lt == 'TDynamic' or rt == 'TDynamic': return 'TDynamic'
+            if lt == rt and lt in ('TString', 'TList'): return lt
+            raise SemanticError(f"incompatible types for 'cat': {lt} and {rt}")
+        if op == 'OpMatMul':
+            if lt in ('TList', 'TDynamic') and rt in ('TList', 'TDynamic'): return 'TList'
+            raise SemanticError(f"operator '@' requires matrix/list operands, got {lt} and {rt}")
+        if op in ('OpSub', 'OpMul', 'OpDiv', 'OpMod', 'OpPow'):
+            if self.is_numeric(lt) and self.is_numeric(rt):
+                if lt == 'TDynamic' or rt == 'TDynamic': return 'TDynamic'
+                return 'TFloat' if ('TFloat' in (lt, rt)) else 'TInt'
+            raise SemanticError(f"arithmetic operator '{op}' requires numeric operands, got {lt} and {rt}")
+        return 'TDynamic'
 
     def parse_var(self):
         name_tok = self.expect('Identifier')
@@ -482,9 +731,9 @@ class Parser:
         self.expect('OpenParen')
         args = []
         if self.current() and self.current().cls != 'CloseParen':
-            args.append(self.parse_expr())
+            args.append(self.parse_logic_expr())
             while self.match('Comma'):
-                args.append(self.parse_expr())
+                args.append(self.parse_logic_expr())
         self.expect('CloseParen')
         return ('CallFunc', name_tok.val, args)
 
@@ -603,28 +852,23 @@ class Parser:
                 return ('ListLit', [])
             # Could be list comprehension or list literal
             save = self.pos
-            saved_symtable = [list(sc) for sc in self.symtable]
             try:
-                first = self.parse_expr()
+                first = self.parse_logic_expr()
                 if self.match('For'):
-                    self.enter_scope()
                     var_tok = self.expect('Identifier')
-                    in_tok = self.expect('In')
-                    self.symtable_insert(var_tok, in_tok)
+                    self.expect('In')
                     src = self.parse_expr()
                     cond = None
                     if self.match('If'):
                         cond = self.parse_logic_expr()
                     self.expect('CloseBracket')
-                    self.exit_scope()
                     return ('ListComp', first, var_tok.val, src, cond)
             except Exception:
                 pass
             self.pos = save
-            self.symtable = saved_symtable
-            elems = [self.parse_expr()]
+            elems = [self.parse_logic_expr()]
             while self.match('Comma'):
-                elems.append(self.parse_expr())
+                elems.append(self.parse_logic_expr())
             self.expect('CloseBracket')
             return ('ListLit', elems)
 
@@ -634,12 +878,12 @@ class Parser:
             if not self.match('CloseBrace'):
                 k = self.expect('StringLiteral').val
                 self.expect('Colon')
-                v = self.parse_expr()
+                v = self.parse_logic_expr()
                 pairs.append((k, v))
                 while self.match('Comma'):
                     k = self.expect('StringLiteral').val
                     self.expect('Colon')
-                    v = self.parse_expr()
+                    v = self.parse_logic_expr()
                     pairs.append((k, v))
                 self.expect('CloseBrace')
             return ('DictLit', pairs)
@@ -660,27 +904,34 @@ class Parser:
 # Parse quickSortV1
 p1 = Parser(v1_toks)
 ast1 = p1.parse_program()
-print("\n=== quickSortV1 PARSED SUCCESSFULLY! ===")
+print("\n=== quickSortV1 PARSED & SEMANTICALLY VALIDATED! ===")
 print(f"Total top-level AST nodes: {len(ast1)}")
-print("Symbol Table (global scope) for quickSortV1:")
-for s in p1.symtable[0]:
+print("Symbol Table (escopo#nome) for quickSortV1:")
+for s in p1.symtable:
     print(f"  {s[0]} -> {s[1]}")
-assert p1.symtable_lookup(Token("", "Identifier", "x")) is None, "List comprehension var 'x' leaked!"
+v1_keys = {t1.val for t1, _ in p1.symtable}
+assert "quicksort_1#lista" in v1_keys and "quicksort_1#pivo" in v1_keys
+assert "lc_2#x" in v1_keys and "lc_3#x" in v1_keys
+assert "global#entrada" in v1_keys and "global#intercala_1" in v1_keys
+assert p1.symtable_lookup_scoped("x") is None, "List comprehension var 'x' leaked!"
 
 # Parse quickSortV2
 p2 = Parser(v2_toks)
 ast2 = p2.parse_program()
-print("\n=== quickSortV2 PARSED SUCCESSFULLY! ===")
+print("\n=== quickSortV2 PARSED & SEMANTICALLY VALIDATED! ===")
 print(f"Total top-level AST nodes: {len(ast2)}")
-print("Symbol Table (global scope) for quickSortV2:")
-for s in p2.symtable[0]:
+print("Symbol Table (escopo#nome) for quickSortV2:")
+for s in p2.symtable:
     print(f"  {s[0]} -> {s[1]}")
+v2_keys = {t1.val for t1, _ in p2.symtable}
+assert "quicksort_2#arr" in v2_keys and "mergesort_2#arr" in v2_keys and "global#main" in v2_keys
 
 # ==================== EDGE CASE UNIT TESTS ====================
 print("\n=== RUNNING EDGE CASE TESTS ===")
 test_cases = [
     ("Empty block", "def f() {} f();"),
     ("If-Else-If ladder", """
+        x = 1;
         if (x < 0) {
             y = -1;
         } else if (x == 0) {
@@ -690,6 +941,8 @@ test_cases = [
         }
     """),
     ("Slices variants", """
+        l = [1, 2, 3, 4, 5, 6];
+        i = 0;
         a = l[:];
         b = l[1:];
         c = l[:5];
@@ -697,18 +950,22 @@ test_cases = [
         e = l[i];
     """),
     ("Multidimensional Index", """
+        mat = [[1, 2], [3, 4]];
+        i = 0;
+        j = 1;
+        val = 99;
         x = mat[i, j];
         mat[i, j] = val;
     """),
-    ("List comprehension without if", "res = [x * 2 for x in items];"),
-    ("List comprehension with if", "res = [x for x in items if x % 2 == 0];"),
+    ("List comprehension without if", "items = [1, 2, 3]; res = [x * 2 for x in items];"),
+    ("List comprehension with if", "items = [1, 2, 3]; res = [x for x in items if x % 2 == 0];"),
     ("Dictionary empty and with pairs", """
         d1 = {};
         d2 = {"key1": 10, "key2": "val"};
     """),
     ("Power operator", "z = 2 ** 3 ^ 4;"),
-    ("Unary operators and precedence", "res = -x + +y * 2;"),
-    ("Logical operators precedence", "flag = a and b or not c and d;"),
+    ("Unary operators and precedence", "x = 3; y = 4; res = -x + +y * 2;"),
+    ("Logical operators precedence", "a = true; b = false; c = true; d = false; flag = a and b or not c and d;"),
     ("Const variants (float, string, bool, id)", """
         const PI = 3.14;
         const MSG = "hello";
@@ -718,12 +975,16 @@ test_cases = [
     """),
     ("Model with subprogram and assignment", """
         model Network {
+            w = [[1, 2], [3, 4]];
+            b = [0, 0];
             def forward(x) {
                 return x @ w + b;
             }
         }
     """),
     ("Tensor matmul, string cat, modulo, assign ops", """
+        a = [[1, 2]];
+        b = [[3], [4]];
         c = a @ b;
         s = "hello " cat "world";
         rem = 10 % 3;
@@ -736,6 +997,7 @@ test_cases = [
     ("Return without expr", "def stop() { return; }"),
     ("While loop", "count = 5; while (count > 0) { count -= 1; }"),
     ("Consecutive list comprehensions isolated scope", """
+        lista = [1, 2, 3, 6, 7];
         a = [x for x in lista if x < 5];
         b = [x for x in lista if x >= 5];
     """)
@@ -747,33 +1009,66 @@ for name, code in test_cases:
         p = Parser(toks)
         ast = p.parse_program()
         if name == "Consecutive list comprehensions isolated scope":
-            assert p.symtable_lookup(Token("", "Identifier", "x")) is None
-        print(f"  PASS: {name} ({len(ast)} stmts, {len(p.symtable[0])} global symbols)")
+            assert p.symtable_lookup_scoped("x") is None
+            keys = {t1.val for t1, _ in p.symtable}
+            assert "lc_1#x" in keys and "lc_2#x" in keys
+        print(f"  PASS: {name} ({len(ast)} stmts, {len(p.symtable)} symbols)")
     except Exception as e:
         print(f"  FAIL: {name} -> {e}")
         sys.exit(1)
 
 print("\n=== RUNNING NEGATIVE SYNTAX TESTS (MUST REJECT) ===")
-negative_cases = [
+negative_syntax_cases = [
     ("Empty enum definition", "enum Empty {}"),
     ("Const declaration with complex expression", "const BAD = 1 + 2;"),
     ("Empty assignment RHS", "x = ;"),
     ("Disallowed var keyword", "var x : int = 10;"),
     ("Unterminated block", "def f() { x = 1;"),
-    ("Disallowed increment operator ++", "i++;"),
-    ("Duplicate const in same scope", "const DUP = 1; const DUP = 2;")
+    ("Disallowed increment operator ++", "i++;")
 ]
 
-for name, code in negative_cases:
+for name, code in negative_syntax_cases:
     try:
         toks = scan(code)
         p = Parser(toks)
         ast = p.parse_program()
         print(f"  FAILED TO REJECT (Unexpected Success): {name}")
         sys.exit(1)
+    except SyntaxError as e:
+        print(f"  PASS (SyntaxError): {name} -> {e}")
     except Exception as e:
-        print(f"  PASS (Correctly Rejected): {name} -> {type(e).__name__}: {e}")
+        print(f"  UNEXPECTED EXCEPTION TYPE ({type(e).__name__}): {name} -> {e}")
+        sys.exit(1)
 
-print("\nALL POSITIVE AND NEGATIVE EDGE CASE TESTS PASSED!")
+print("\n=== RUNNING NEGATIVE SEMANTIC TESTS (MUST REJECT) ===")
+negative_semantic_cases = [
+    ("Undeclared variable in expression", "y = nao_existe + 1;"),
+    ("List comprehension var used outside", "l = [1, 2]; a = [x for x in l]; y = x;"),
+    ("Compound assign on undeclared var", "z += 1;"),
+    ("Reassign to const", "const PI = 3.14; PI = 3.15;"),
+    ("Const initialized with mutable var", "a = 10; const C = a;"),
+    ("Call undeclared function", "inexistente(1, 2);"),
+    ("Function call with wrong arity", "def f(a, b) { return a; } f(1);"),
+    ("Incompatible types in '+'", 'x = 10 + "texto";'),
+    ("Non-boolean condition in if/while", "if (123) { x = 1; }"),
+    ("Return outside function", "return 10;"),
+    ("Duplicate const in same scope", "const DUP = 1; const DUP = 2;"),
+    ("Division by zero literal", "x = 10 / 0;")
+]
+
+for name, code in negative_semantic_cases:
+    try:
+        toks = scan(code)
+        p = Parser(toks)
+        ast = p.parse_program()
+        print(f"  FAILED TO REJECT (Unexpected Success): {name}")
+        sys.exit(1)
+    except SemanticError as e:
+        print(f"  PASS (SemanticError): {name} -> {e}")
+    except Exception as e:
+        print(f"  UNEXPECTED EXCEPTION TYPE ({type(e).__name__}): {name} -> {e}")
+        sys.exit(1)
+
+print("\nALL POSITIVE, NEGATIVE SYNTAX, AND NEGATIVE SEMANTIC TESTS PASSED!")
 
 

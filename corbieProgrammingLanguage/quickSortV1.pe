@@ -9,6 +9,18 @@ def quicksort_1(lista) {
     
     return quicksort_1(menores) + [pivo] + quicksort_1(maiores);
 }
+def intercala_1(esq, dir) {
+    if (len(esq) == 0) {
+        return dir;
+    }
+    if (len(dir) == 0) {
+        return esq;
+    }
+    if (esq[0] <= dir[0]) {
+        return [esq[0]] + intercala_1(esq[1:], dir);
+    }
+    return [dir[0]] + intercala_1(esq, dir[1:]);
+}
 def mergesort_1(lista) {
     if (len(lista) <= 1) {
         return lista;

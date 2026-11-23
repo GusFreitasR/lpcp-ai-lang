@@ -16,8 +16,8 @@ def quicksort_2(arr, low, high) {
         
         pi = i + 1;
         
-        quicksort(arr, low, pi - 1);
-        quicksort(arr, pi + 1, high);
+        quicksort_2(arr, low, pi - 1);
+        quicksort_2(arr, pi + 1, high);
     }
     return arr;
 }
@@ -73,7 +73,7 @@ def main() {
     print("Vetor original:");
     print(lista);
     
-    quicksort(lista, 0, n - 1);
+    quicksort_2(lista, 0, n - 1);
     
     print("Vetor ordenado com sucesso:");
     print(lista);
