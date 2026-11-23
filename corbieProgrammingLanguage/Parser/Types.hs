@@ -5,12 +5,18 @@ import Text.Parsec (ParsecT)
 
 type SymbolTable = [(Token, Token)]
 
+data ListShape
+  = ShapeKnown [Int]
+  | ShapeUnknown
+  | ShapeIrregular
+  deriving (Eq, Show)
+
 data CorbieType
   = TInt
   | TFloat
   | TBool
   | TString
-  | TList
+  | TList ListShape
   | TDict
   | TModel String
   | TEnum String
@@ -23,6 +29,7 @@ data ParserState = ParserState
   , scopeCounter :: Int
   , varTypes     :: [(String, CorbieType)]
   , constSet     :: [String]
+  , constZeros   :: [String]
   , funcSigs     :: [(String, (Int, Maybe Int, CorbieType))]
   , inFunction   :: Bool
   } deriving (Eq, Show)

@@ -10,6 +10,7 @@ initialParserState = ParserState
   , scopeCounter = 0
   , varTypes     = []
   , constSet     = []
+  , constZeros   = []
   , funcSigs     = []
   , inFunction   = False
   }
