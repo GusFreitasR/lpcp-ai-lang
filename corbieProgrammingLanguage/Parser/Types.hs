@@ -3,9 +3,31 @@ module Parser.Types where
 import Scanner
 import Text.Parsec (ParsecT)
 
-type Scope = [(Token, Token)]
-type SymbolTable = [Scope]
-type Parser a = ParsecT [Token] SymbolTable IO a
+type SymbolTable = [(Token, Token)]
+
+data CorbieType
+  = TInt
+  | TFloat
+  | TBool
+  | TString
+  | TList
+  | TDict
+  | TModel String
+  | TEnum String
+  | TDynamic
+  deriving (Eq, Show)
+
+data ParserState = ParserState
+  { symTable     :: SymbolTable
+  , scopeStack   :: [String]
+  , scopeCounter :: Int
+  , varTypes     :: [(String, CorbieType)]
+  , constSet     :: [String]
+  , funcSigs     :: [(String, (Int, Maybe Int, CorbieType))]
+  , inFunction   :: Bool
+  } deriving (Eq, Show)
+
+type Parser a = ParsecT [Token] ParserState IO a
 
 data Program = Program [Stmt] deriving (Eq, Show)
 
