@@ -173,10 +173,10 @@ class SemanticError(Exception):
 BUILTINS = {
     "input":     (0, 1, "TDynamic"),
     "len":       (1, 1, "TInt"),
-    "split":     (2, 2, "TList"),
-    "zeros":     (1, None, "TList"),
-    "ones":      (1, None, "TList"),
-    "reshape":   (2, 2, "TList"),
+    "split":     (2, 2, ("TList", "ShapeUnknown")),
+    "zeros":     (1, None, ("TList", "ShapeUnknown")),
+    "ones":      (1, None, ("TList", "ShapeUnknown")),
+    "reshape":   (2, 2, ("TList", "ShapeUnknown")),
     "dot":       (2, 2, "TDynamic"),
     "to_int":    (1, 1, "TInt"),
     "to_float":  (1, 1, "TFloat"),
@@ -198,6 +198,7 @@ class Parser:
         self.scope_counter = 0
         self.var_types = {}
         self.const_set = set()
+        self.const_zeros = set()
         self.func_sigs = dict(BUILTINS)
         self.in_function = False
 
@@ -329,15 +330,19 @@ class Parser:
         self.expect('Assign')
         e, val_tok = self.parse_const_val()
         self.expect('SemiColon')
-        typ = self.check_const_expr(e)
-        self.symtable_insert_scoped(name_tok, val_tok, typ=typ, is_const=True)
+        typ, is_zero = self.check_const_expr(e)
+        key = self.symtable_insert_scoped(name_tok, val_tok, typ=typ, is_const=True)
+        if is_zero:
+            self.const_zeros.add(key)
         return ('ConstDecl', name_tok.val, e)
 
     def check_const_expr(self, e):
         kind = e[0]
         if kind == 'LitExpr':
-            cls = e[1][0]
-            return {'IntLiteral': 'TInt', 'FloatLiteral': 'TFloat', 'StringLiteral': 'TString', 'BoolLiteral': 'TBool'}[cls]
+            cls, val = e[1]
+            typ = {'IntLiteral': 'TInt', 'FloatLiteral': 'TFloat', 'StringLiteral': 'TString', 'BoolLiteral': 'TBool'}[cls]
+            is_zero = (cls in ('IntLiteral', 'FloatLiteral') and val == 0)
+            return (typ, is_zero)
         if kind == 'VarExpr' and e[1][0] == 'SimpleVar':
             ref = e[1][1]
             found = self.symtable_lookup_scoped(ref)
@@ -346,7 +351,7 @@ class Parser:
             key, _ = found
             if key not in self.const_set:
                 raise SemanticError(f"constant initializer '{ref}' is not a constant")
-            return self.var_types.get(key, 'TDynamic')
+            return (self.var_types.get(key, 'TDynamic'), key in self.const_zeros)
         raise SemanticError("constant must be initialized with a literal or another constant")
 
     def parse_const_val(self):
@@ -504,8 +509,11 @@ class Parser:
         val_tok = Token(base_tok.pos, op)
         if v[0] == 'IndexVar':
             key, _ = self.check_var_chain(v)
+            base_t = self.var_types.get(key, 'TDynamic')
             if key in self.const_set:
                 raise SemanticError(f"cannot mutate constant '{base_tok.val}'")
+            if base_t == 'TString':
+                raise SemanticError(f"strings are immutable and cannot be assigned by index ('{base_tok.val}')")
             if op != 'Assign':
                 self.check_compound_compat(op, 'TDynamic', rhs_type)
             return
@@ -535,7 +543,7 @@ class Parser:
             if lt == 'TInt' and rt == 'TInt': return 'TInt'
             if (lt == 'TFloat' or rt == 'TFloat') and self.is_numeric(lt) and self.is_numeric(rt): return 'TFloat'
             if lt == 'TString' and rt == 'TString': return 'TString'
-            if lt == 'TList' and rt == 'TList': return 'TList'
+            if self.is_list(lt) and self.is_list(rt): return ('TList', 'ShapeUnknown')
         if op == 'DivAssign' and lt == 'TInt' and rt == 'TInt': return 'TInt'
         if lt == 'TFloat' or rt == 'TFloat': return 'TFloat'
         if lt == 'TInt' and rt == 'TInt': return 'TInt'
@@ -552,10 +560,82 @@ class Parser:
         sig = self.lookup_func_sig(fn_name)
         if not sig:
             raise SemanticError(f"undeclared function '{fn_name}'")
-        arg_types = [self.eval_expr(a) for a in args]
         min_a, max_a, ret_t = sig
-        if len(arg_types) < min_a or (max_a is not None and len(arg_types) > max_a):
-            raise SemanticError(f"function '{fn_name}' arity mismatch: expected ({min_a}, {max_a}), got {len(arg_types)}")
+        if len(args) < min_a or (max_a is not None and len(args) > max_a):
+            raise SemanticError(f"function '{fn_name}' arity mismatch: expected ({min_a}, {max_a}), got {len(args)}")
+        arg_types = [self.eval_expr(a) for a in args]
+        return self.check_builtin_args(fn_name, args, arg_types, ret_t)
+
+    def extract_pos_lit_int(self, expr_node):
+        if expr_node[0] == 'IntLit':
+            if expr_node[1] <= 0:
+                raise SemanticError(f"matrix dimension must be positive, got {expr_node[1]}")
+            return expr_node[1]
+        if expr_node[0] == 'UnaryOp' and expr_node[1] == 'OpNeg' and expr_node[2][0] == 'IntLit':
+            val = -expr_node[2][1]
+            if val <= 0:
+                raise SemanticError(f"matrix dimension must be positive, got {val}")
+            return val
+        return None
+
+    def check_builtin_args(self, fn, args, arg_types, ret_t):
+        if fn == "len":
+            if not self.is_iterable(arg_types[0]):
+                raise SemanticError(f"'len' requires iterable argument, got {arg_types[0]}")
+            return ret_t
+        if fn == "split":
+            s_t, sep_t = arg_types
+            if s_t not in ('TString', 'TDynamic') or sep_t not in ('TString', 'TDynamic'):
+                raise SemanticError(f"'split' requires (string, string), got ({s_t}, {sep_t})")
+            return ret_t
+        if fn == "input" and len(arg_types) == 1:
+            if arg_types[0] not in ('TString', 'TDynamic'):
+                raise SemanticError(f"'input' prompt must be string, got {arg_types[0]}")
+            return ret_t
+        if fn in ("zeros", "ones"):
+            for t in arg_types:
+                if t not in ('TInt', 'TDynamic'):
+                    raise SemanticError(f"matrix dimension must be int, got {t}")
+            dims = [self.extract_pos_lit_int(a) for a in args]
+            if all(d is not None for d in dims):
+                return ('TList', ('ShapeKnown', dims))
+            return ('TList', 'ShapeUnknown')
+        if fn == "reshape":
+            m_t, sh_t = arg_types
+            if m_t == ('TList', 'ShapeIrregular'):
+                raise SemanticError("cannot reshape irregular matrix")
+            if not (self.is_list(m_t) or m_t == 'TDynamic'):
+                raise SemanticError(f"'reshape' first argument must be list/matrix, got {m_t}")
+            if sh_t == ('TList', 'ShapeIrregular') or not (self.is_list(sh_t) or sh_t == 'TDynamic'):
+                raise SemanticError(f"'reshape' shape argument must be list, got {sh_t}")
+            shape_expr = args[1]
+            if shape_expr[0] == 'ListLit':
+                for el in shape_expr[1]:
+                    et = self.eval_expr(el)
+                    if et not in ('TInt', 'TDynamic'):
+                        raise SemanticError(f"matrix dimension must be int, got {et}")
+                new_dims = [self.extract_pos_lit_int(el) for el in shape_expr[1]]
+                if all(d is not None for d in new_dims):
+                    if isinstance(m_t, tuple) and isinstance(m_t[1], tuple) and m_t[1][0] in ('ShapeKnown', 'ShapeNonNumeric'):
+                        old_dims = m_t[1][1]
+                        old_prod = 1
+                        for d in old_dims: old_prod *= d
+                        new_prod = 1
+                        for d in new_dims: new_prod *= d
+                        if old_prod != new_prod:
+                            raise SemanticError(f"cannot reshape matrix of size {old_prod} into shape {new_dims}")
+                        return ('TList', (m_t[1][0], new_dims))
+                    return ('TList', ('ShapeKnown', new_dims))
+            return ('TList', 'ShapeUnknown')
+        if fn == "dot":
+            self.check_numeric_matrix_expr(args[0])
+            self.check_numeric_matrix_expr(args[1])
+            return self.eval_matmul("dot", arg_types[0], arg_types[1])
+        if fn in ("to_int", "int", "to_float", "float"):
+            t = arg_types[0]
+            if t not in ('TInt', 'TFloat', 'TBool', 'TString', 'TDynamic'):
+                raise SemanticError(f"cannot convert {t} to number in '{fn}'")
+            return 'TInt' if fn in ('to_int', 'int') else 'TFloat'
         return ret_t
 
     def check_var_chain(self, v):
@@ -568,14 +648,22 @@ class Parser:
             return (key, self.var_types.get(key, 'TDynamic'))
         _, inner, slices = v
         key, inner_t = self.check_var_chain(inner)
-        if inner_t not in ('TList', 'TString', 'TDict', 'TDynamic'):
+        if not self.is_indexable(inner_t):
             raise SemanticError(f"type {inner_t} is not indexable")
+        if inner_t == 'TString' and len(slices) > 1:
+            raise SemanticError("too many indices for string")
+        if inner_t == 'TDict' and len(slices) > 1:
+            raise SemanticError("too many indices for dict")
+        if isinstance(inner_t, tuple) and isinstance(inner_t[1], tuple) and inner_t[1][0] in ('ShapeKnown', 'ShapeNonNumeric'):
+            dims = inner_t[1][1]
+            if len(slices) > len(dims):
+                raise SemanticError(f"too many indices for list/matrix: expected at most {len(dims)}, got {len(slices)}")
         for s in slices:
             if s[0] == 'SliceSingle':
                 idx_t = self.eval_expr(s[1])
                 if inner_t == 'TDict':
-                    if idx_t not in ('TString', 'TInt', 'TDynamic'):
-                        raise SemanticError(f"invalid dict key type {idx_t}")
+                    if idx_t not in ('TString', 'TDynamic'):
+                        raise SemanticError(f"dictionary key must be string, got {idx_t}")
                 elif idx_t not in ('TInt', 'TDynamic'):
                     raise SemanticError(f"index must be int, got {idx_t}")
             else:
@@ -586,17 +674,113 @@ class Parser:
                         bt = self.eval_expr(bound)
                         if bt not in ('TInt', 'TDynamic'):
                             raise SemanticError(f"slice bound must be int, got {bt}")
-        return (key, 'TString' if inner_t == 'TString' else 'TDynamic')
+        if inner_t == 'TString':
+            return (key, 'TString')
+        if isinstance(inner_t, tuple) and isinstance(inner_t[1], tuple) and inner_t[1][0] in ('ShapeKnown', 'ShapeNonNumeric'):
+            if any(s[0] == 'SliceFromTo' for s in slices):
+                return (key, ('TList', 'ShapeUnknown'))
+            rem = inner_t[1][1][len(slices):]
+            return (key, 'TDynamic' if not rem else ('TList', (inner_t[1][0], rem)))
+        return (key, 'TDynamic')
 
     def is_numeric(self, t):
         return t in ('TInt', 'TFloat', 'TDynamic')
 
+    def is_list(self, t):
+        return isinstance(t, tuple) and t[0] == 'TList'
+
+    def is_indexable(self, t):
+        return self.is_list(t) or t in ('TString', 'TDict', 'TDynamic')
+
     def is_iterable(self, t):
-        return t in ('TList', 'TString', 'TDict', 'TDynamic')
+        return self.is_list(t) or t in ('TString', 'TDict', 'TDynamic')
 
     def check_bool_condition(self, ctx, t):
         if t not in ('TBool', 'TDynamic'):
             raise SemanticError(f"condition in '{ctx}' must be boolean, got {t}")
+
+    def infer_list_type(self, elems):
+        if not elems:
+            return ('TList', ('ShapeKnown', [0]))
+        elem_types = [self.eval_expr(el) for el in elems]
+        if ('TList', 'ShapeIrregular') in elem_types:
+            return ('TList', 'ShapeIrregular')
+        if all(isinstance(t, tuple) and isinstance(t[1], tuple) and t[1][0] in ('ShapeKnown', 'ShapeNonNumeric') for t in elem_types):
+            dims = [t[1][1] for t in elem_types]
+            if all(d == dims[0] for d in dims[1:]):
+                non_num = any(t[1][0] == 'ShapeNonNumeric' for t in elem_types)
+                ctor = 'ShapeNonNumeric' if non_num else 'ShapeKnown'
+                return ('TList', (ctor, [len(elems)] + dims[0]))
+            return ('TList', 'ShapeIrregular')
+        if any(self.is_list(t) for t in elem_types):
+            if all(self.is_list(t) or t == 'TDynamic' for t in elem_types):
+                return ('TList', 'ShapeUnknown')
+            return ('TList', 'ShapeIrregular')
+        if any(t not in ('TInt', 'TFloat', 'TDynamic') for t in elem_types):
+            return ('TList', ('ShapeNonNumeric', [len(elems)]))
+        if 'TDynamic' in elem_types:
+            return ('TList', 'ShapeUnknown')
+        return ('TList', ('ShapeKnown', [len(elems)]))
+
+    def check_numeric_matrix_expr(self, expr_node):
+        if expr_node[0] == 'ListLit':
+            for el in expr_node[1]:
+                if el[0] == 'ListLit':
+                    self.check_numeric_matrix_expr(el)
+                else:
+                    t = self.eval_expr(el)
+                    if not (self.is_numeric(t) or self.is_list(t)):
+                        raise SemanticError(f"matrix elements must be numeric, got {t}")
+
+    def eval_matmul(self, op_name, lt, rt):
+        if lt == ('TList', 'ShapeIrregular') or rt == ('TList', 'ShapeIrregular'):
+            raise SemanticError(f"operator '{op_name}' cannot be applied to irregular matrix")
+        if (isinstance(lt, tuple) and isinstance(lt[1], tuple) and lt[1][0] == 'ShapeNonNumeric') or \
+           (isinstance(rt, tuple) and isinstance(rt[1], tuple) and rt[1][0] == 'ShapeNonNumeric'):
+            raise SemanticError(f"matrix elements must be numeric for '{op_name}'")
+        if not ((self.is_list(lt) or lt == 'TDynamic') and (self.is_list(rt) or rt == 'TDynamic')):
+            raise SemanticError(f"operator '{op_name}' requires matrix/list operands, got {lt} and {rt}")
+        if isinstance(lt, tuple) and isinstance(lt[1], tuple) and lt[1][0] == 'ShapeKnown' and \
+           isinstance(rt, tuple) and isinstance(rt[1], tuple) and rt[1][0] == 'ShapeKnown':
+            s1, s2 = lt[1][1], rt[1][1]
+            if not s1 or not s2 or any(d == 0 for d in s1) or any(d == 0 for d in s2):
+                raise SemanticError(f"cannot multiply empty matrix in '{op_name}'")
+            if len(s1) == 2 and len(s2) == 2:
+                m, n = s1; p, q = s2
+                if n != p:
+                    raise SemanticError(f"matrix dimension mismatch in '{op_name}': cannot multiply ({m}x{n}) by ({p}x{q})")
+                return ('TList', ('ShapeKnown', [m, q]))
+            if len(s1) == 2 and len(s2) == 1:
+                m, n = s1; p = s2[0]
+                if n != p:
+                    raise SemanticError(f"matrix dimension mismatch in '{op_name}': ({m}x{n}) vs vector({p})")
+                return ('TList', ('ShapeKnown', [m]))
+            if len(s1) == 1 and len(s2) == 2:
+                n = s1[0]; p, q = s2
+                if n != p:
+                    raise SemanticError(f"matrix dimension mismatch in '{op_name}': vector({n}) vs ({p}x{q})")
+                return ('TList', ('ShapeKnown', [q]))
+            if len(s1) == 1 and len(s2) == 1:
+                if s1[0] != s2[0]:
+                    raise SemanticError(f"vector dimension mismatch in '{op_name}': {s1[0]} vs {s2[0]}")
+                return 'TDynamic'
+            inner_l = s1[-1]
+            inner_r = s2[-2] if len(s2) >= 2 else s2[0]
+            if inner_l != inner_r:
+                raise SemanticError(f"tensor dimension mismatch in '{op_name}': {s1} vs {s2}")
+            return ('TList', 'ShapeUnknown')
+        return ('TList', 'ShapeUnknown')
+
+    def is_zero_expr(self, expr_node):
+        if expr_node[0] in ('IntLit', 'FloatLit') and expr_node[1] == 0:
+            return True
+        if expr_node[0] == 'UnaryOp' and expr_node[1] in ('OpNeg', 'OpPos'):
+            return self.is_zero_expr(expr_node[2])
+        if expr_node[0] == 'VarExpr' and expr_node[1][0] == 'SimpleVar':
+            found = self.symtable_lookup_scoped(expr_node[1][1])
+            if found and found[0] in self.const_zeros:
+                return True
+        return False
 
     def eval_expr(self, e):
         kind = e[0]
@@ -610,9 +794,7 @@ class Parser:
             _, fc = e
             return self.check_func_call(fc[1], fc[2])
         if kind == 'ListLit':
-            for elem in e[1]:
-                self.eval_expr(elem)
-            return 'TList'
+            return self.infer_list_type(e[1])
         if kind == 'DictLit':
             for _, val in e[1]:
                 self.eval_expr(val)
@@ -630,7 +812,7 @@ class Parser:
             if cond_expr is not None:
                 self.check_bool_condition('list comprehension', self.eval_expr(cond_expr))
             self.exit_scope()
-            return 'TList'
+            return ('TList', 'ShapeUnknown')
         if kind == 'UnaryOp':
             _, op, sub = e
             t = self.eval_expr(sub)
@@ -643,7 +825,11 @@ class Parser:
             return t
         if kind == 'BinaryOp':
             _, op, left, right = e
-            if op in ('OpDiv', 'OpMod') and right[0] in ('IntLit', 'FloatLit') and right[1] == 0:
+            if op == 'OpMatMul':
+                self.check_numeric_matrix_expr(left)
+                self.check_numeric_matrix_expr(right)
+                return self.eval_matmul("@", self.eval_expr(left), self.eval_expr(right))
+            if op in ('OpDiv', 'OpMod') and self.is_zero_expr(right):
                 raise SemanticError("division/modulo by zero")
             lt = self.eval_expr(left)
             rt = self.eval_expr(right)
@@ -656,32 +842,40 @@ class Parser:
                 return 'TBool'
             raise SemanticError(f"logical '{op}' requires boolean operands, got {lt} and {rt}")
         if op == 'In':
+            if rt == 'TString':
+                if lt not in ('TString', 'TDynamic'):
+                    raise SemanticError(f"left operand of 'in' on string must be string, got {lt}")
+                return 'TBool'
+            if rt == 'TDict':
+                if lt not in ('TString', 'TDynamic'):
+                    raise SemanticError(f"left operand of 'in' on dict must be string key, got {lt}")
+                return 'TBool'
             if not self.is_iterable(rt):
                 raise SemanticError(f"right operand of 'in' must be iterable, got {rt}")
             return 'TBool'
         if op in ('Equal', 'NotEqual'):
-            if lt == 'TDynamic' or rt == 'TDynamic' or (self.is_numeric(lt) and self.is_numeric(rt)) or lt == rt:
+            if lt == 'TDynamic' or rt == 'TDynamic' or (self.is_numeric(lt) and self.is_numeric(rt)) or (self.is_list(lt) and self.is_list(rt)) or lt == rt:
                 return 'TBool'
             raise SemanticError(f"cannot compare incompatible types {lt} and {rt}")
         if op in ('Less', 'LessEqual', 'Greater', 'GreaterEqual'):
-            if lt == 'TDynamic' or rt == 'TDynamic' or (self.is_numeric(lt) and self.is_numeric(rt)) or (lt == rt and lt in ('TString', 'TList')):
+            if lt == 'TDynamic' or rt == 'TDynamic' or (self.is_numeric(lt) and self.is_numeric(rt)) or (lt == rt == 'TString') or (self.is_list(lt) and self.is_list(rt)):
                 return 'TBool'
             raise SemanticError(f"cannot order incompatible types {lt} and {rt}")
         if op == 'OpAdd':
             if lt == 'TDynamic' or rt == 'TDynamic':
-                return 'TList' if (lt == 'TList' or rt == 'TList') else 'TDynamic'
+                return ('TList', 'ShapeUnknown') if (self.is_list(lt) or self.is_list(rt)) else 'TDynamic'
             if lt == 'TInt' and rt == 'TInt': return 'TInt'
             if self.is_numeric(lt) and self.is_numeric(rt): return 'TFloat'
             if lt == 'TString' and rt == 'TString': return 'TString'
-            if lt == 'TList' and rt == 'TList': return 'TList'
+            if self.is_list(lt) and self.is_list(rt): return ('TList', 'ShapeUnknown')
             raise SemanticError(f"incompatible types for '+': {lt} and {rt}")
         if op == 'OpCat':
             if lt == 'TDynamic' or rt == 'TDynamic': return 'TDynamic'
-            if lt == rt and lt in ('TString', 'TList'): return lt
+            if lt == 'TString' and rt == 'TString': return 'TString'
+            if self.is_list(lt) and self.is_list(rt): return ('TList', 'ShapeUnknown')
             raise SemanticError(f"incompatible types for 'cat': {lt} and {rt}")
         if op == 'OpMatMul':
-            if lt in ('TList', 'TDynamic') and rt in ('TList', 'TDynamic'): return 'TList'
-            raise SemanticError(f"operator '@' requires matrix/list operands, got {lt} and {rt}")
+            return self.eval_matmul("@", lt, rt)
         if op in ('OpSub', 'OpMul', 'OpDiv', 'OpMod', 'OpPow'):
             if self.is_numeric(lt) and self.is_numeric(rt):
                 if lt == 'TDynamic' or rt == 'TDynamic': return 'TDynamic'
@@ -1000,6 +1194,21 @@ test_cases = [
         lista = [1, 2, 3, 6, 7];
         a = [x for x in lista if x < 5];
         b = [x for x in lista if x >= 5];
+    """),
+    ("Chained matrix multiplication, zeros, ones, reshape, dot", """
+        m1 = zeros(2, 3);
+        m2 = ones(3, 4);
+        m3 = zeros(4, 2);
+        res = (m1 @ m2) @ m3;
+        r2 = reshape([[1, 2, 3, 4]], [2, 2]) @ [[1], [2]];
+        d = dot([1, 2], [3, 4]);
+    """),
+    ("Built-in conversions and dict string indexing", """
+        n = to_int("42") + 1;
+        f = to_float(3) + 0.5;
+        parts = split("a b", " ");
+        cfg = {"lr": 0.01};
+        v = cfg["lr"];
     """)
 ]
 
@@ -1053,7 +1262,31 @@ negative_semantic_cases = [
     ("Non-boolean condition in if/while", "if (123) { x = 1; }"),
     ("Return outside function", "return 10;"),
     ("Duplicate const in same scope", "const DUP = 1; const DUP = 2;"),
-    ("Division by zero literal", "x = 10 / 0;")
+    ("Division by zero literal", "x = 10 / 0;"),
+    ("Division by zero constant", "const Z = 0; x = 10 / Z;"),
+    ("Matrix dimension mismatch (2x3) @ (4x2)", "a = zeros(2, 3); b = ones(4, 2); c = a @ b;"),
+    ("Chained matrix dimension mismatch (2x3)@(3x4)@(5x1)", "a = zeros(2, 3); b = ones(3, 4); c = zeros(5, 1); r = (a @ b) @ c;"),
+    ("Matrix x vector dimension mismatch", "a = [[1, 2, 3], [4, 5, 6]]; v = [1, 2]; r = a @ v;"),
+    ("Vector x matrix dimension mismatch", "v = [1, 2]; a = [[1], [2], [3]]; r = v @ a;"),
+    ("Irregular matrix in '@'", "a = [[1, 2], [3]]; b = [[1], [2]]; c = a @ b;"),
+    ("Non-numeric matrix elements in '@'", 'a = [["a", "b"]]; b = [["c"], ["d"]]; c = a @ b;'),
+    ("Dot product dimension mismatch", "d = dot([1, 2], [3, 4, 5]);"),
+    ("Reshape element count mismatch", "r = reshape(zeros(2, 3), [2, 2]);"),
+    ("Zeros non-positive dimension", "m = zeros(0, 3);"),
+    ("Indexing non-indexable scalar", "x = 10; y = x[0];"),
+    ("Too many indices for 2D matrix", "m = [[1, 2], [3, 4]]; x = m[0, 1, 2];"),
+    ("String immutability on indexed assignment", 's = "abc"; s[0] = "x";'),
+    ("Invalid dict key type (int)", 'd = {"a": 1}; x = d[0];'),
+    ("Invalid 'in' left operand on string", 'x = 1 in "abc";'),
+    ("Invalid built-in argument type: len(42)", "x = len(42);"),
+    ("Invalid built-in argument type: split(123, ...)", 'x = split(123, " ");'),
+    ("Invalid boolean ordering: true < false", "x = true < false;"),
+    ("Invalid logical operands: 1 and 2", "x = 1 and 2;"),
+    ("Invalid unary not on int", "x = not 1;"),
+    ("Invalid unary minus on string", 'x = -"abc";'),
+    ("Compound assign type mismatch: str -= str", 's = "a"; s -= "b";'),
+    ("Compound assign type mismatch: str += int", 's = "a"; s += 1;'),
+    ("Duplicate function parameter", "def f(a, a) { return a; }")
 ]
 
 for name, code in negative_semantic_cases:

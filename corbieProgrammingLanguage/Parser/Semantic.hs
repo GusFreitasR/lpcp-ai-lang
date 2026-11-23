@@ -200,6 +200,10 @@ checkReshape [_, shapeExpr] [mType, shapeType] = do
               if product oldDims == product newDims
                 then return (TList (ShapeKnown newDims))
                 else semanticError ("cannot reshape matrix of size " ++ show (product oldDims) ++ " into shape " ++ show newDims)
+            TList (ShapeNonNumeric oldDims) ->
+              if product oldDims == product newDims
+                then return (TList (ShapeNonNumeric newDims))
+                else semanticError ("cannot reshape matrix of size " ++ show (product oldDims) ++ " into shape " ++ show newDims)
             _ -> return (TList (ShapeKnown newDims))
     _ -> return (TList ShapeUnknown)
 checkReshape _ _ = return (TList ShapeUnknown)
@@ -246,6 +250,10 @@ checkVarChain (IndexVar inner slices) = do
           if length slices > length dims
             then semanticError ("too many indices for list/matrix: expected at most " ++ show (length dims) ++ ", got " ++ show (length slices))
             else return ()
+        TList (ShapeNonNumeric dims) ->
+          if length slices > length dims
+            then semanticError ("too many indices for list/matrix: expected at most " ++ show (length dims) ++ ", got " ++ show (length slices))
+            else return ()
         _ -> return ()
       mapM_ (checkSlice innerType) slices
       let resType = indexResultType innerType slices
@@ -258,6 +266,11 @@ indexResultType (TList (ShapeKnown dims)) slices
   | otherwise =
       let remDims = drop (length slices) dims
       in if null remDims then TDynamic else TList (ShapeKnown remDims)
+indexResultType (TList (ShapeNonNumeric dims)) slices
+  | any isRangeSlice slices = TList ShapeUnknown
+  | otherwise =
+      let remDims = drop (length slices) dims
+      in if null remDims then TDynamic else TList (ShapeNonNumeric remDims)
 indexResultType _ _ = TDynamic
 
 isRangeSlice :: Slice -> Bool
@@ -447,21 +460,32 @@ inferListType elems = do
   elemTypes <- mapM evalExpr elems
   if any (== TList ShapeIrregular) elemTypes
     then return (TList ShapeIrregular)
-    else if all isKnownShape elemTypes
-      then case [d | TList (ShapeKnown d) <- elemTypes] of
-             (firstD : restD) | all (== firstD) restD ->
-               return (TList (ShapeKnown (length elems : firstD)))
-             _ -> return (TList ShapeIrregular)
-      else if any isListType elemTypes
-        then if all isListOrDyn elemTypes
-               then return (TList ShapeUnknown)
-               else return (TList ShapeIrregular)
-        else if any (== TDynamic) elemTypes
-          then return (TList ShapeUnknown)
-          else return (TList (ShapeKnown [length elems]))
+    else case mapM extractRectShape elemTypes of
+      Just ((firstNonNum, firstD) : rest) ->
+        if all ((== firstD) . snd) rest
+          then let nonNum = firstNonNum || any fst rest
+                   ctor = if nonNum then ShapeNonNumeric else ShapeKnown
+               in return (TList (ctor (length elems : firstD)))
+          else return (TList ShapeIrregular)
+      Just [] -> return (TList (ShapeKnown [0]))
+      Nothing ->
+        if any isListType elemTypes
+          then if all isListOrDyn elemTypes
+                 then return (TList ShapeUnknown)
+                 else return (TList ShapeIrregular)
+          else if any isScalarNonNumeric elemTypes
+            then return (TList (ShapeNonNumeric [length elems]))
+            else if any (== TDynamic) elemTypes
+              then return (TList ShapeUnknown)
+              else return (TList (ShapeKnown [length elems]))
   where
-    isKnownShape (TList (ShapeKnown _)) = True
-    isKnownShape _                      = False
+    extractRectShape (TList (ShapeKnown d))      = Just (False, d)
+    extractRectShape (TList (ShapeNonNumeric d)) = Just (True, d)
+    extractRectShape _                           = Nothing
+    isScalarNonNumeric TInt     = False
+    isScalarNonNumeric TFloat   = False
+    isScalarNonNumeric TDynamic = False
+    isScalarNonNumeric _        = True
     isListOrDyn (TList _) = True
     isListOrDyn TDynamic  = True
     isListOrDyn _         = False
@@ -482,6 +506,10 @@ evalMatMul opName (TList ShapeIrregular) _ =
   semanticError ("operator '" ++ opName ++ "' cannot be applied to irregular matrix")
 evalMatMul opName _ (TList ShapeIrregular) =
   semanticError ("operator '" ++ opName ++ "' cannot be applied to irregular matrix")
+evalMatMul opName (TList (ShapeNonNumeric _)) _ =
+  semanticError ("matrix elements must be numeric for '" ++ opName ++ "'")
+evalMatMul opName _ (TList (ShapeNonNumeric _)) =
+  semanticError ("matrix elements must be numeric for '" ++ opName ++ "'")
 evalMatMul opName (TList (ShapeKnown s1)) (TList (ShapeKnown s2))
   | null s1 || null s2 || any (== 0) s1 || any (== 0) s2 =
       semanticError ("cannot multiply empty matrix in '" ++ opName ++ "'")

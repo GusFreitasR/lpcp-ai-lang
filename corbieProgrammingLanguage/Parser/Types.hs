@@ -7,6 +7,7 @@ type SymbolTable = [(Token, Token)]
 
 data ListShape
   = ShapeKnown [Int]
+  | ShapeNonNumeric [Int]
   | ShapeUnknown
   | ShapeIrregular
   deriving (Eq, Show)
