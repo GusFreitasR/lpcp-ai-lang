@@ -1,0 +1,82 @@
+valores = split(input(), " ");
+n = len(valores);
+
+if (n == 0) {
+    print("Sequencia vazia");
+} else {
+    chave = zeros(n);
+    esq = zeros(n);
+    dir = zeros(n);
+    nivel = zeros(n);
+
+    for (i = 0; i < n; i += 1) {
+        chave[i] = to_int(valores[i]);
+        esq[i] = -1;
+        dir[i] = -1;
+        nivel[i] = 0;
+    }
+
+    for (i = 1; i < n; i += 1) {
+        atual = 0;
+        colocado = false;
+        while (not colocado) {
+            if (chave[i] <= chave[atual]) {
+                if (esq[atual] == -1) {
+                    esq[atual] = i;
+                    nivel[i] = nivel[atual] + 1;
+                    colocado = true;
+                } else {
+                    atual = esq[atual];
+                }
+            } else {
+                if (dir[atual] == -1) {
+                    dir[atual] = i;
+                    nivel[i] = nivel[atual] + 1;
+                    colocado = true;
+                } else {
+                    atual = dir[atual];
+                }
+            }
+        }
+    }
+
+    no = 0;
+    while (esq[no] != -1) {
+        no = esq[no];
+    }
+    print("Chave minima: " cat to_string(chave[no]) cat " (nivel " cat to_string(nivel[no]) cat ")");
+
+    no = 0;
+    while (dir[no] != -1) {
+        no = dir[no];
+    }
+    print("Chave maxima: " cat to_string(chave[no]) cat " (nivel " cat to_string(nivel[no]) cat ")");
+
+    fila = zeros(n);
+    fila[0] = 0;
+    ini = 0;
+    fim = 1;
+    nivel_atual = 0;
+    linha = "";
+
+    print("Arvore nivel a nivel:");
+    while (ini < fim) {
+        no = fila[ini];
+        ini += 1;
+        if (nivel[no] != nivel_atual) {
+            print("Nivel " cat to_string(nivel_atual) cat ": " cat linha);
+            linha = "";
+            nivel_atual = nivel[no];
+        }
+        linha = linha cat to_string(chave[no]) cat " ";
+        if (esq[no] != -1) {
+            fila[fim] = esq[no];
+            fim += 1;
+        }
+        if (dir[no] != -1) {
+            fila[fim] = dir[no];
+            fim += 1;
+        }
+    }
+    print("Nivel " cat to_string(nivel_atual) cat ": " cat linha);
+}

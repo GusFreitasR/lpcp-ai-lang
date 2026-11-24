@@ -1,0 +1,23 @@
+faixa1 = 0;
+faixa2 = 0;
+faixa3 = 0;
+faixa4 = 0;
+
+n = to_float(input());
+while (n >= 0) {
+    if (n >= 0 and n <= 25) {
+        faixa1 += 1;
+    } else if (n >= 26 and n <= 50) {
+        faixa2 += 1;
+    } else if (n >= 51 and n <= 75) {
+        faixa3 += 1;
+    } else if (n >= 76 and n <= 100) {
+        faixa4 += 1;
+    }
+    n = to_float(input());
+}
+
+print("[0, 25]: " cat to_string(faixa1));
+print("[26, 50]: " cat to_string(faixa2));
+print("[51, 75]: " cat to_string(faixa3));
+print("[76, 100]: " cat to_string(faixa4));

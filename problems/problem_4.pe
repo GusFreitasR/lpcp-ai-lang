@@ -1,0 +1,93 @@
+def gcd_iter(a, b) {
+    if (a < 0) {
+        a = -a;
+    }
+    if (b < 0) {
+        b = -b;
+    }
+    while (b != 0) {
+        t = b;
+        b = a % b;
+        a = t;
+    }
+    return a;
+}
+
+def make_rational(a, b) {
+    if (b == 0) {
+        print("Erro: denominador igual a zero");
+        return;
+    }
+    if (b < 0) {
+        a = -a;
+        b = -b;
+    }
+    g = gcd_iter(a, b);
+    a = to_int(a / g);
+    b = to_int(b / g);
+    return {"numerador": a, "denominador": b};
+}
+
+def equals_rational(p, q) {
+    if (p["numerador"] * q["denominador"] == q["numerador"] * p["denominador"]) {
+        return true;
+    } else {
+        return false;
+    }
+}
+
+def add_rational(p, q) {
+    n = p["numerador"] * q["denominador"] + q["numerador"] * p["denominador"];
+    d = p["denominador"] * q["denominador"];
+    return make_rational(n, d);
+}
+
+def neg_rational(p) {
+    return make_rational(-p["numerador"], p["denominador"]);
+}
+
+def sub_rational(p, q) {
+    return add_rational(p, neg_rational(q));
+}
+
+def mul_rational(p, q) {
+    return make_rational(p["numerador"] * q["numerador"], p["denominador"] * q["denominador"]);
+}
+
+def inv_rational(p) {
+    if (p["numerador"] == 0) {
+        print("Erro: inverso de zero");
+        return;
+    }
+    return make_rational(p["denominador"], p["numerador"]);
+}
+
+def div_rational(p, q) {
+    if (q["numerador"] == 0) {
+        print("Erro: divisao por zero");
+        return;
+    }
+    return mul_rational(p, inv_rational(q));
+}
+
+def print_rational(rotulo, p) {
+    print(rotulo cat " numerador = " cat to_string(p["numerador"]) cat ", denominador = " cat to_string(p["denominador"]));
+}
+
+p = make_rational(1, 2);
+q = make_rational(3, 4);
+r = make_rational(2, 4);
+
+print_rational("p = 1/2:", p);
+print_rational("q = 3/4:", q);
+print_rational("r = 2/4:", r);
+
+print("p == q? " cat to_string(equals_rational(p, q)));
+print("p == r? " cat to_string(equals_rational(p, r)));
+
+print_rational("p + q:", add_rational(p, q));
+print_rational("-p:", neg_rational(p));
+print_rational("p - q:", sub_rational(p, q));
+print_rational("p * q:", mul_rational(p, q));
+print_rational("inverso de q:", inv_rational(q));
+print_rational("p / q:", div_rational(p, q));

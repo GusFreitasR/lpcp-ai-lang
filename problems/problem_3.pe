@@ -1,0 +1,58 @@
+def ler_matriz(linhas, colunas) {
+    M = zeros(linhas, colunas);
+    for (i = 0; i < linhas; i += 1) {
+        valores = split(input(), " ");
+        for (j = 0; j < colunas; j += 1) {
+            M[i][j] = to_float(valores[j]);
+        }
+    }
+    return M;
+}
+
+def imprimir_matriz(M, linhas, colunas) {
+    for (i = 0; i < linhas; i += 1) {
+        texto = "";
+        for (j = 0; j < colunas; j += 1) {
+            texto = texto cat to_string(M[i][j]) cat " ";
+        }
+        print(texto);
+    }
+}
+
+dimA = split(input(), " ");
+la = to_int(dimA[0]);
+ca = to_int(dimA[1]);
+A = ler_matriz(la, ca);
+
+dimB = split(input(), " ");
+lb = to_int(dimB[0]);
+cb = to_int(dimB[1]);
+B = ler_matriz(lb, cb);
+
+if (la == lb and ca == cb) {
+    S = zeros(la, ca);
+    for (i = 0; i < la; i += 1) {
+        for (j = 0; j < ca; j += 1) {
+            S[i][j] = A[i][j] + B[i][j];
+        }
+    }
+    print("Soma:");
+    imprimir_matriz(S, la, ca);
+} else {
+    print("Impossivel somar: as matrizes tem dimensoes diferentes.");
+}
+
+if (ca == lb) {
+    P = zeros(la, cb);
+    for (i = 0; i < la; i += 1) {
+        for (j = 0; j < cb; j += 1) {
+            for (k = 0; k < ca; k += 1) {
+                P[i][j] += A[i][k] * B[k][j];
+            }
+        }
+    }
+    print("Produto:");
+    imprimir_matriz(P, la, cb);
+} else {
+    print("Impossivel multiplicar: colunas de A diferente de linhas de B.");
+}
