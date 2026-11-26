@@ -1,58 +1,61 @@
-def ler_matriz(linhas, colunas) {
-    M = zeros(linhas, colunas);
-    for (i = 0; i < linhas; i += 1) {
-        valores = split(input(), " ");
-        for (j = 0; j < colunas; j += 1) {
-            M[i][j] = to_float(valores[j]);
-        }
+def intervalo(n) {
+    resultado = [];
+    i = 0;
+    while (i < n) {
+        resultado = resultado + [i];
+        i += 1;
     }
-    return M;
+    return resultado;
 }
 
-def imprimir_matriz(M, linhas, colunas) {
-    for (i = 0; i < linhas; i += 1) {
+def somatorio(valores) {
+    if (len(valores) == 0) {
+        return 0;
+    }
+    return valores[0] + somatorio(valores[1:]);
+}
+
+def ler_matriz(linhas) {
+    return [[to_float(x) for x in split(input(), " ")] for k in intervalo(linhas)];
+}
+
+def somar(A, B) {
+    return [[A[i][j] + B[i][j] for j in intervalo(len(A[0]))] for i in intervalo(len(A))];
+}
+
+def multiplicar(A, B) {
+    return [[somatorio([A[i][k] * B[k][j] for k in intervalo(len(B))]) for j in intervalo(len(B[0]))] for i in intervalo(len(A))];
+}
+
+def imprimir_matriz(M) {
+    for (linha in M) {
         texto = "";
-        for (j = 0; j < colunas; j += 1) {
-            texto = texto cat to_string(M[i][j]) cat " ";
+        for (x in linha) {
+            texto = texto cat to_string(x) cat " ";
         }
         print(texto);
     }
 }
 
-dimA = split(input(), " ");
-la = to_int(dimA[0]);
-ca = to_int(dimA[1]);
-A = ler_matriz(la, ca);
+def main() {
+    dimA = split(input(), " ");
+    A = ler_matriz(to_int(dimA[0]));
+    dimB = split(input(), " ");
+    B = ler_matriz(to_int(dimB[0]));
 
-dimB = split(input(), " ");
-lb = to_int(dimB[0]);
-cb = to_int(dimB[1]);
-B = ler_matriz(lb, cb);
-
-if (la == lb and ca == cb) {
-    S = zeros(la, ca);
-    for (i = 0; i < la; i += 1) {
-        for (j = 0; j < ca; j += 1) {
-            S[i][j] = A[i][j] + B[i][j];
-        }
+    if (len(A) == len(B) and len(A[0]) == len(B[0])) {
+        print("Soma:");
+        imprimir_matriz(somar(A, B));
+    } else {
+        print("Impossivel somar: as matrizes tem dimensoes diferentes.");
     }
-    print("Soma:");
-    imprimir_matriz(S, la, ca);
-} else {
-    print("Impossivel somar: as matrizes tem dimensoes diferentes.");
+
+    if (len(A[0]) == len(B)) {
+        print("Produto:");
+        imprimir_matriz(multiplicar(A, B));
+    } else {
+        print("Impossivel multiplicar: colunas de A diferente de linhas de B.");
+    }
 }
 
-if (ca == lb) {
-    P = zeros(la, cb);
-    for (i = 0; i < la; i += 1) {
-        for (j = 0; j < cb; j += 1) {
-            for (k = 0; k < ca; k += 1) {
-                P[i][j] += A[i][k] * B[k][j];
-            }
-        }
-    }
-    print("Produto:");
-    imprimir_matriz(P, la, cb);
-} else {
-    print("Impossivel multiplicar: colunas de A diferente de linhas de B.");
-}
+main();

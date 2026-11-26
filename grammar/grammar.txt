@@ -1,27 +1,62 @@
-<program> → <stmt_list>
+<program> → <decl_list> <main_exec>
+          | <main_exec>
+
+<decl_list> → <decl>
+            | <decl> <decl_list>
+
+<decl> → <func_def>
+       | <model_def>
+       | <enum_def>
+       | <const_decl> ";"
+
+<main_exec> → "def" "main" "(" ")" <func_block> "main" "(" ")" ";"
+            | <stmt_list>
+
+<func_block> → "{" <local_decl_list> <stmt_list> "}"
+             | "{" <stmt_list> "}"
+
+<local_decl_list> → <local_decl>
+                  | <local_decl> <local_decl_list>
+
+<local_decl> → <func_def>
+             | <const_decl> ";"
+
+<block> → "{" <stmt_list> "}"
+        | "{" "}"
 
 <stmt_list> → <stmt>
             | <stmt> <stmt_list>
 
-<stmt> → <func_def>
-       | <model_def>
-       | <enum_def>
-       | <const_decl> ";"
-       | <assign> ";"
-       | <func_call> ";"
-       | <if_stmt>
-       | <while_stmt>
-       | <for_stmt>
-       | <return_stmt> ";"
-       | <print_stmt> ";"
+<stmt> → <simple_stmt> ";"
+       | <control_stmt>
+       | <jump_stmt> ";"
 
-<func_def> → "def" <id> "(" <param_list> ")" <block>
-           | "def" <id> "(" ")" <block>
+<simple_stmt> → <assign>
+              | <func_call>
+              | <io_stmt>
+
+<control_stmt> → <if_stmt>
+               | <loop_stmt>
+
+<loop_stmt> → <while_stmt>
+            | <for_stmt>
+
+<jump_stmt> → <return_stmt>
+
+<io_stmt> → <print_stmt>
+
+<func_def> → "def" <id> "(" <param_list> ")" <func_block>
+           | "def" <id> "(" ")" <func_block>
 
 <param_list> → <id>
              | <id> "," <param_list>
 
-<model_def> → "model" <id> <block>
+<model_def> → "model" <id> "{" <model_body> "}"
+
+<model_body> → <assign> ";"
+             | <func_def>
+             | <assign> ";" <model_body>
+             | <func_def> <model_body>
 
 <enum_def> → "enum" <id> "{" <id_list> "}"
 
@@ -32,9 +67,6 @@
 
 <const_val> → <literal>
             | <id>
-
-<block> → "{" <stmt_list> "}"
-        | "{" "}"
 
 <assign> → <var> <assign_op> <expr>
 
@@ -51,7 +83,7 @@
             | <id> "(" ")"
             | <built_in>
 
-<built_in> → "input" "(" ")"
+<built_in> → <input_call>
            | "len" "(" <expr> ")"
            | "split" "(" <expr> "," <expr> ")"
            | "zeros" "(" <arg_list> ")"
@@ -63,11 +95,11 @@
            | "to_string" "(" <expr> ")"
            | "to_bool" "(" <expr> ")"
 
-<arg_list> → <arg>
-           | <arg> "," <arg_list>
+<input_call> → "input" "(" ")"
+             | "input" "(" <expr> ")"
 
-<arg> → <expr>
-      | <id> "=" <expr>
+<arg_list> → <expr>
+           | <expr> "," <arg_list>
 
 <return_stmt> → "return" <expr>
               | "return"

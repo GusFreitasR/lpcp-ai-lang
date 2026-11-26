@@ -10,9 +10,13 @@ def mdc(n, m, r) {
     }
 }
 
-n = to_int(input());
-m = to_int(input());
-r = [0];
+def main() {
+    n = to_int(input());
+    m = to_int(input());
+    r = [0];
 
-mdc(n, m, r);
-print("MDC = " cat to_string(r[0]));
+    mdc(n, m, r);
+    print("MDC = " cat to_string(r[0]));
+}
+
+main();

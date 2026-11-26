@@ -1,82 +1,75 @@
-valores = split(input(), " ");
-n = len(valores);
-
-if (n == 0) {
-    print("Sequencia vazia");
-} else {
-    chave = zeros(n);
-    esq = zeros(n);
-    dir = zeros(n);
-    nivel = zeros(n);
-
-    for (i = 0; i < n; i += 1) {
-        chave[i] = to_int(valores[i]);
-        esq[i] = -1;
-        dir[i] = -1;
-        nivel[i] = 0;
+def inserir(arvore, k) {
+    if (len(arvore) == 0) {
+        return [k, [], []];
     }
+    if (k <= arvore[0]) {
+        return [arvore[0], inserir(arvore[1], k), arvore[2]];
+    }
+    return [arvore[0], arvore[1], inserir(arvore[2], k)];
+}
 
-    for (i = 1; i < n; i += 1) {
-        atual = 0;
-        colocado = false;
-        while (not colocado) {
-            if (chave[i] <= chave[atual]) {
-                if (esq[atual] == -1) {
-                    esq[atual] = i;
-                    nivel[i] = nivel[atual] + 1;
-                    colocado = true;
-                } else {
-                    atual = esq[atual];
-                }
-            } else {
-                if (dir[atual] == -1) {
-                    dir[atual] = i;
-                    nivel[i] = nivel[atual] + 1;
-                    colocado = true;
-                } else {
-                    atual = dir[atual];
-                }
+def construir(valores) {
+    arvore = [];
+    for (v in valores) {
+        arvore = inserir(arvore, to_int(v));
+    }
+    return arvore;
+}
+
+def minimo(arvore, nivel) {
+    if (len(arvore[1]) == 0) {
+        return [arvore[0], nivel];
+    }
+    return minimo(arvore[1], nivel + 1);
+}
+
+def maximo(arvore, nivel) {
+    if (len(arvore[2]) == 0) {
+        return [arvore[0], nivel];
+    }
+    return maximo(arvore[2], nivel + 1);
+}
+
+def imprimir_niveis(arvore) {
+    nivel = 0;
+    atual = [arvore];
+    while (len(atual) > 0) {
+        texto = "";
+        for (k in [no[0] for no in atual]) {
+            texto = texto cat to_string(k) cat " ";
+        }
+        print("Nivel " cat to_string(nivel) cat ": " cat texto);
+
+        proximos = [];
+        for (no in atual) {
+            if (len(no[1]) > 0) {
+                proximos = proximos + [no[1]];
+            }
+            if (len(no[2]) > 0) {
+                proximos = proximos + [no[2]];
             }
         }
+        atual = proximos;
+        nivel += 1;
     }
-
-    no = 0;
-    while (esq[no] != -1) {
-        no = esq[no];
-    }
-    print("Chave minima: " cat to_string(chave[no]) cat " (nivel " cat to_string(nivel[no]) cat ")");
-
-    no = 0;
-    while (dir[no] != -1) {
-        no = dir[no];
-    }
-    print("Chave maxima: " cat to_string(chave[no]) cat " (nivel " cat to_string(nivel[no]) cat ")");
-
-    fila = zeros(n);
-    fila[0] = 0;
-    ini = 0;
-    fim = 1;
-    nivel_atual = 0;
-    linha = "";
-
-    print("Arvore nivel a nivel:");
-    while (ini < fim) {
-        no = fila[ini];
-        ini += 1;
-        if (nivel[no] != nivel_atual) {
-            print("Nivel " cat to_string(nivel_atual) cat ": " cat linha);
-            linha = "";
-            nivel_atual = nivel[no];
-        }
-        linha = linha cat to_string(chave[no]) cat " ";
-        if (esq[no] != -1) {
-            fila[fim] = esq[no];
-            fim += 1;
-        }
-        if (dir[no] != -1) {
-            fila[fim] = dir[no];
-            fim += 1;
-        }
-    }
-    print("Nivel " cat to_string(nivel_atual) cat ": " cat linha);
 }
+
+def main() {
+    valores = split(input(), " ");
+    if (len(valores) == 0) {
+        print("Sequencia vazia");
+    } else {
+        arvore = construir(valores);
+
+        menor = minimo(arvore, 0);
+        print("Chave minima: " cat to_string(menor[0]) cat " (nivel " cat to_string(menor[1]) cat ")");
+
+        maior = maximo(arvore, 0);
+        print("Chave maxima: " cat to_string(maior[0]) cat " (nivel " cat to_string(maior[1]) cat ")");
+
+        print("Arvore nivel a nivel:");
+        imprimir_niveis(arvore);
+    }
+}
+
+main();

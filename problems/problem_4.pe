@@ -1,16 +1,15 @@
-def gcd_iter(a, b) {
-    if (a < 0) {
-        a = -a;
+def euclides(a, b) {
+    if (b == 0) {
+        return a;
     }
-    if (b < 0) {
-        b = -b;
+    return euclides(b, a % b);
+}
+
+def valor_absoluto(v) {
+    if (v < 0) {
+        return -v;
     }
-    while (b != 0) {
-        t = b;
-        b = a % b;
-        a = t;
-    }
-    return a;
+    return v;
 }
 
 def make_rational(a, b) {
@@ -22,10 +21,8 @@ def make_rational(a, b) {
         a = -a;
         b = -b;
     }
-    g = gcd_iter(a, b);
-    a = to_int(a / g);
-    b = to_int(b / g);
-    return {"numerador": a, "denominador": b};
+    g = euclides(valor_absoluto(a), b);
+    return {"numerador": to_int(a / g), "denominador": to_int(b / g)};
 }
 
 def equals_rational(p, q) {
@@ -37,9 +34,7 @@ def equals_rational(p, q) {
 }
 
 def add_rational(p, q) {
-    n = p["numerador"] * q["denominador"] + q["numerador"] * p["denominador"];
-    d = p["denominador"] * q["denominador"];
-    return make_rational(n, d);
+    return make_rational(p["numerador"] * q["denominador"] + q["numerador"] * p["denominador"], p["denominador"] * q["denominador"]);
 }
 
 def neg_rational(p) {
@@ -74,20 +69,24 @@ def print_rational(rotulo, p) {
     print(rotulo cat " numerador = " cat to_string(p["numerador"]) cat ", denominador = " cat to_string(p["denominador"]));
 }
 
-p = make_rational(1, 2);
-q = make_rational(3, 4);
-r = make_rational(2, 4);
+def main() {
+    p = make_rational(1, 2);
+    q = make_rational(3, 4);
+    r = make_rational(2, 4);
 
-print_rational("p = 1/2:", p);
-print_rational("q = 3/4:", q);
-print_rational("r = 2/4:", r);
+    print_rational("p = 1/2:", p);
+    print_rational("q = 3/4:", q);
+    print_rational("r = 2/4:", r);
 
-print("p == q? " cat to_string(equals_rational(p, q)));
-print("p == r? " cat to_string(equals_rational(p, r)));
+    print("p == q? " cat to_string(equals_rational(p, q)));
+    print("p == r? " cat to_string(equals_rational(p, r)));
 
-print_rational("p + q:", add_rational(p, q));
-print_rational("-p:", neg_rational(p));
-print_rational("p - q:", sub_rational(p, q));
-print_rational("p * q:", mul_rational(p, q));
-print_rational("inverso de q:", inv_rational(q));
-print_rational("p / q:", div_rational(p, q));
+    print_rational("p + q:", add_rational(p, q));
+    print_rational("-p:", neg_rational(p));
+    print_rational("p - q:", sub_rational(p, q));
+    print_rational("p * q:", mul_rational(p, q));
+    print_rational("inverso de q:", inv_rational(q));
+    print_rational("p / q:", div_rational(p, q));
+}
+
+main();

@@ -1,6 +1,10 @@
-x = 3.5;
-y = 1.25;
-c = 4;
+const x = 3.5;
+const y = 1.25;
+const c = 4;
 
-resultado = x ** 2 - y + c;
-print("Resultado de x^2 - y + c = " cat to_string(resultado));
+def main() {
+    resultado = x ** 2 - y + c;
+    print("Resultado de x^2 - y + c = " cat to_string(resultado));
+}
+
+main();

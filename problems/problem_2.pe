@@ -1,23 +1,20 @@
-faixa1 = 0;
-faixa2 = 0;
-faixa3 = 0;
-faixa4 = 0;
-
-n = to_float(input());
-while (n >= 0) {
-    if (n >= 0 and n <= 25) {
-        faixa1 += 1;
-    } else if (n >= 26 and n <= 50) {
-        faixa2 += 1;
-    } else if (n >= 51 and n <= 75) {
-        faixa3 += 1;
-    } else if (n >= 76 and n <= 100) {
-        faixa4 += 1;
-    }
+def main() {
+    numeros = [];
     n = to_float(input());
+    while (n >= 0) {
+        numeros = numeros + [n];
+        n = to_float(input());
+    }
+
+    faixa1 = len([v for v in numeros if v >= 0 and v <= 25]);
+    faixa2 = len([v for v in numeros if v >= 26 and v <= 50]);
+    faixa3 = len([v for v in numeros if v >= 51 and v <= 75]);
+    faixa4 = len([v for v in numeros if v >= 76 and v <= 100]);
+
+    print("[0, 25]: " cat to_string(faixa1));
+    print("[26, 50]: " cat to_string(faixa2));
+    print("[51, 75]: " cat to_string(faixa3));
+    print("[76, 100]: " cat to_string(faixa4));
 }
 
-print("[0, 25]: " cat to_string(faixa1));
-print("[26, 50]: " cat to_string(faixa2));
-print("[51, 75]: " cat to_string(faixa3));
-print("[76, 100]: " cat to_string(faixa4));
+main();
