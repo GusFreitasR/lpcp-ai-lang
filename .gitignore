@@ -5,3 +5,4 @@
 *.dyn_o
 corbieProgrammingLanguage/parserV1
 parserV1
+*.exe

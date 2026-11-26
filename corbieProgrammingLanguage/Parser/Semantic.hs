@@ -291,6 +291,9 @@ checkSlice containerType (SliceSingle e) = do
     TDict -> if t == TString || t == TDynamic
                then return ()
                else semanticError ("dictionary key must be string, got " ++ show t)
+    TDynamic -> if t == TString || isIntCompatible t
+                  then return ()
+                  else semanticError ("index on dynamic value must be string or int, got " ++ show t)
     _     -> if isIntCompatible t
                then return ()
                else semanticError ("index must be int, got " ++ show t)
