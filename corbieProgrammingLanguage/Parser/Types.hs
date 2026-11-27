@@ -4,7 +4,37 @@ import Scanner
 import Text.Parsec (ParsecT)
 
 type SymbolTable = [(Token, Token)]
-type Parser a = ParsecT [Token] SymbolTable IO a
+
+data ListShape
+  = ShapeKnown [Int]
+  | ShapeNonNumeric [Int]
+  | ShapeUnknown
+  | ShapeIrregular
+  deriving (Eq, Show)
+
+data CorbieType
+  = TInt
+  | TFloat
+  | TBool
+  | TString
+  | TList ListShape
+  | TDict
+  | TModel String
+  | TEnum String
+  | TDynamic
+  deriving (Eq, Show)
+
+data ParserState = ParserState
+  { symTable     :: SymbolTable
+  , scopeStack   :: [String]
+  , scopeCounter :: Int
+  , varTypes     :: [(String, CorbieType)]
+  , consts       :: [(String, Bool)]
+  , funcSigs     :: [(String, (Int, Maybe Int, CorbieType))]
+  , inFunction   :: Bool
+  } deriving (Eq, Show)
+
+type Parser a = ParsecT [Token] ParserState IO a
 
 data Program = Program [Stmt] deriving (Eq, Show)
 

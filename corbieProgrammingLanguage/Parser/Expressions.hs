@@ -4,7 +4,6 @@ import Scanner
 import Text.Parsec
 import Parser.Types
 import Parser.Tokens
-import Parser.SymbolTable
 
 logicExpr :: Parser Expr
 logicExpr = chainl1 logicTerm (orToken >> return (BinaryExpr OpOr))
@@ -71,12 +70,19 @@ primary = choice
   , (VarExpr . fst) `fmap` varParser
   ]
 
+extractInt :: Token -> Int
 extractInt (Token _ (IntLiteral n)) = n
 extractInt _ = 0
+
+extractFloat :: Token -> Double
 extractFloat (Token _ (FloatLiteral n)) = n
 extractFloat _ = 0.0
+
+extractString :: Token -> String
 extractString (Token _ (StringLiteral value)) = value
 extractString _ = ""
+
+extractBool :: Token -> Bool
 extractBool (Token _ (BoolLiteral value)) = value
 extractBool _ = False
 
@@ -103,10 +109,20 @@ varIndexSuffix = do
 
 sliceParser :: Parser Slice
 sliceParser = choice [try sliceBoth, try sliceFrom, try sliceTo, try sliceAll, sliceIndex]
+
+sliceBoth :: Parser Slice
 sliceBoth = do a <- expr; colonToken; b <- expr; return (SliceFromTo (Just a) (Just b))
+
+sliceFrom :: Parser Slice
 sliceFrom = do a <- expr; colonToken; return (SliceFromTo (Just a) Nothing)
+
+sliceTo :: Parser Slice
 sliceTo = do colonToken; b <- expr; return (SliceFromTo Nothing (Just b))
+
+sliceAll :: Parser Slice
 sliceAll = colonToken >> return (SliceFromTo Nothing Nothing)
+
+sliceIndex :: Parser Slice
 sliceIndex = SliceSingle `fmap` expr
 
 listOrListComp :: Parser Expr
@@ -119,11 +135,10 @@ listCompBody = do
   value <- logicExpr
   forToken
   varTok <- idToken
-  inTok <- inToken
+  _ <- inToken
   source <- expr
   condition <- optionMaybe (ifToken >> logicExpr)
   closeBracketToken
-  updateState (symtable_insert_or_update (varTok, inTok))
   return (ListCompExpr value (tokenName varTok) source condition)
 
 normalListBody :: Parser Expr
