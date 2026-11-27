@@ -38,23 +38,23 @@ liftEitherState :: Either String ParserState -> Parser ()
 liftEitherState (Left err)   = semanticError err
 liftEitherState (Right newS) = modifyState (const newS)
 
-declareSymbol :: Token -> Token -> CorbieType -> Bool -> Parser ()
-declareSymbol nameTok valTok typ isConst = do
+declareSymbol :: Token -> Token -> CorbieType -> Maybe Bool -> Parser ()
+declareSymbol nameTok valTok typ mConstZero = do
   st <- getState
-  liftEitherState (insertScopedSymbol nameTok valTok typ isConst st)
+  liftEitherState (insertScopedSymbol nameTok valTok typ mConstZero st)
 
 declareParam :: Token -> Token -> Parser ()
-declareParam paramTok defTok = declareSymbol paramTok defTok TDynamic False
+declareParam paramTok defTok = declareSymbol paramTok defTok TDynamic Nothing
 
 declareModel :: Token -> Token -> Parser ()
 declareModel nameTok modelTok =
-  declareSymbol nameTok modelTok (TModel (rawTokName nameTok)) False
+  declareSymbol nameTok modelTok (TModel (rawTokName nameTok)) Nothing
 
 declareEnum :: Token -> Token -> [Token] -> Parser ()
 declareEnum nameTok enumTok members = do
   let enumT = TEnum (rawTokName nameTok)
-  declareSymbol nameTok enumTok enumT True
-  mapM_ (\m -> declareSymbol m enumTok enumT True) members
+  declareSymbol nameTok enumTok enumT (Just False)
+  mapM_ (\m -> declareSymbol m enumTok enumT (Just False)) members
 
 declareFunc :: Token -> Token -> [Token] -> Parser ()
 declareFunc nameTok defTok params = do
@@ -63,7 +63,7 @@ declareFunc nameTok defTok params = do
   st <- getState
   let scope    = currentScopeName st
       scopedFn = scopedName scope fnName
-  case insertScopedSymbol nameTok defTok TDynamic False st of
+  case insertScopedSymbol nameTok defTok TDynamic Nothing st of
     Left err -> semanticError err
     Right st' -> do
       let newSigs = upsertAssoc scopedFn (arity, Just arity, TDynamic) (funcSigs st')
@@ -80,13 +80,7 @@ declareConst nameTok valExpr mConstIdTok = do
         _ -> case mConstIdTok of
                Just t  -> t
                Nothing -> Token (tokPos nameTok) Const
-  declareSymbol nameTok valTok typ True
-  if isZero
-    then do
-      st <- getState
-      let key = scopedName (currentScopeName st) (rawTokName nameTok)
-      modifyState (\s -> s { constZeros = key : constZeros s })
-    else return ()
+  declareSymbol nameTok valTok typ (Just isZero)
 
 checkConstExpr :: Expr -> Parser (CorbieType, Bool)
 checkConstExpr (LitExpr (IntLit n))    = return (TInt, n == 0)
@@ -98,9 +92,9 @@ checkConstExpr (VarExpr (SimpleVar refName)) = do
   case symtable_lookup_scoped refName st of
     Nothing -> semanticError ("undeclared constant '" ++ refName ++ "'")
     Just (key, _) ->
-      if key `elem` constSet st
-        then return (lookupTypeOrDyn key st, key `elem` constZeros st)
-        else semanticError ("constant initializer '" ++ refName ++ "' is not a constant")
+      case lookup key (consts st) of
+        Just isZero -> return (lookupTypeOrDyn key st, isZero)
+        Nothing     -> semanticError ("constant initializer '" ++ refName ++ "' is not a constant")
 checkConstExpr _ = semanticError "constant must be initialized with a literal or another constant"
 
 lookupTypeOrDyn :: String -> ParserState -> CorbieType
@@ -358,7 +352,7 @@ checkAssign baseTok var op rhsExpr = do
     IndexVar _ _ -> do
       (key, _) <- checkVarChain var
       let baseT = lookupTypeOrDyn key st
-      if key `elem` constSet st
+      if isConstKey key st
         then semanticError ("cannot mutate constant '" ++ baseName ++ "'")
         else if baseT == TString
           then semanticError ("strings are immutable and cannot be assigned by index ('" ++ baseName ++ "')")
@@ -368,7 +362,7 @@ checkAssign baseTok var op rhsExpr = do
     SimpleVar _ ->
       case symtable_lookup_scoped baseName st of
         Just (key, _) ->
-          if key `elem` constSet st
+          if isConstKey key st
             then semanticError ("cannot assign to constant '" ++ baseName ++ "'")
             else do
               let curType = lookupTypeOrDyn key st
@@ -384,7 +378,7 @@ checkAssign baseTok var op rhsExpr = do
           case op of
             OpAssign -> do
               stNow <- getState
-              liftEitherState (insertScopedSymbol baseTok valTok rhsType False stNow)
+              liftEitherState (insertScopedSymbol baseTok valTok rhsType Nothing stNow)
             _ -> semanticError ("undeclared variable '" ++ baseName ++ "' in compound assignment")
 
 checkCompoundCompat :: AssignOp -> CorbieType -> CorbieType -> Parser ()
@@ -425,7 +419,7 @@ evalExpr (ListCompExpr valExpr varName srcExpr mCond) = do
       let alexP  = AlexPn 0 (sourceLine pos) (sourceColumn pos)
           varTok = Token alexP (Identifier varName)
           inTok  = Token alexP In
-      declareSymbol varTok inTok TDynamic False
+      declareSymbol varTok inTok TDynamic Nothing
       _ <- evalExpr valExpr
       case mCond of
         Nothing   -> return ()
@@ -556,7 +550,7 @@ isZeroExpr (UnaryExpr OpPos e)      = isZeroExpr e
 isZeroExpr (VarExpr (SimpleVar name)) = do
   st <- getState
   case symtable_lookup_scoped name st of
-    Just (key, _) -> return (key `elem` constZeros st)
+    Just (key, _) -> return (isConstZero key st)
     Nothing       -> return False
 isZeroExpr _ = return False
 

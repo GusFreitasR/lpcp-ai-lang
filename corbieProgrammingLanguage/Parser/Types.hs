@@ -29,8 +29,7 @@ data ParserState = ParserState
   , scopeStack   :: [String]
   , scopeCounter :: Int
   , varTypes     :: [(String, CorbieType)]
-  , constSet     :: [String]
-  , constZeros   :: [String]
+  , consts       :: [(String, Bool)]
   , funcSigs     :: [(String, (Int, Maybe Int, CorbieType))]
   , inFunction   :: Bool
   } deriving (Eq, Show)

@@ -120,7 +120,7 @@ forIn = do
     then semanticError ("'for ... in' source must be iterable, got " ++ show srcType)
     else do
       modifyState (enterAnonScope "for")
-      declareSymbol variable inTok TDynamic False
+      declareSymbol variable inTok TDynamic Nothing
       body <- blockStatements
       modifyState exitScope
       return (ForInStmt (tokenName variable) source body)

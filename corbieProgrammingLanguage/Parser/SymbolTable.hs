@@ -9,8 +9,7 @@ initialParserState = ParserState
   , scopeStack   = ["global"]
   , scopeCounter = 0
   , varTypes     = []
-  , constSet     = []
-  , constZeros   = []
+  , consts       = []
   , funcSigs     = []
   , inFunction   = False
   }
@@ -28,18 +27,27 @@ scopedToken scope (Token pos (Identifier name)) = Token pos (Identifier (scopedN
 scopedToken _ tok = tok
 
 enterNamedScope :: String -> ParserState -> ParserState
-enterNamedScope name st = st { scopeStack = name : scopeStack st }
+enterNamedScope name st =
+  let (parent, base) = case scopeStack st of
+        (s : rest) -> (s, s : rest)
+        []         -> ("global", ["global"])
+      nextScope = parent ++ "." ++ name
+  in st { scopeStack = nextScope : base }
 
 enterAnonScope :: String -> ParserState -> ParserState
 enterAnonScope prefix st =
-  let nextId = scopeCounter st + 1
-      name   = prefix ++ "_" ++ show nextId
-  in st { scopeStack = name : scopeStack st, scopeCounter = nextId }
+  let (parent, base) = case scopeStack st of
+        (s : rest) -> (s, s : rest)
+        []         -> ("global", ["global"])
+      nextId    = scopeCounter st + 1
+      nextScope = parent ++ "." ++ prefix ++ "_" ++ show nextId
+  in st { scopeStack = nextScope : base, scopeCounter = nextId }
 
 exitScope :: ParserState -> ParserState
 exitScope st = case scopeStack st of
   (_ : outer@(_ : _)) -> st { scopeStack = outer }
-  _                    -> st
+  []                  -> st { scopeStack = ["global"] }
+  _                   -> st
 
 symtable_lookup :: Token -> SymbolTable -> Maybe (Token, Token)
 symtable_lookup _ [] = Nothing
@@ -94,8 +102,18 @@ upsertAssoc k v ((k', v') : rest)
   | k == k'   = (k, v) : rest
   | otherwise = (k', v') : upsertAssoc k v rest
 
-insertScopedSymbol :: Token -> Token -> CorbieType -> Bool -> ParserState -> Either String ParserState
-insertScopedSymbol nameTok valTok typ isConst st =
+isConstKey :: String -> ParserState -> Bool
+isConstKey key st = case lookup key (consts st) of
+  Just _  -> True
+  Nothing -> False
+
+isConstZero :: String -> ParserState -> Bool
+isConstZero key st = case lookup key (consts st) of
+  Just True -> True
+  _         -> False
+
+insertScopedSymbol :: Token -> Token -> CorbieType -> Maybe Bool -> ParserState -> Either String ParserState
+insertScopedSymbol nameTok valTok typ mConstZero st =
   let scope = currentScopeName st
       key   = scopedName scope (rawTokName nameTok)
       sTok  = scopedToken scope nameTok
@@ -104,7 +122,9 @@ insertScopedSymbol nameTok valTok typ isConst st =
        Right newTbl -> Right st
          { symTable = newTbl
          , varTypes = upsertAssoc key typ (varTypes st)
-         , constSet = if isConst then key : constSet st else constSet st
+         , consts   = case mConstZero of
+                        Just isZero -> upsertAssoc key isZero (consts st)
+                        Nothing     -> consts st
          }
 
 updateScopedSymbol :: String -> Token -> Token -> CorbieType -> ParserState -> Either String ParserState

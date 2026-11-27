@@ -197,8 +197,7 @@ class Parser:
         self.scope_stack = ["global"]
         self.scope_counter = 0
         self.var_types = {}
-        self.const_set = set()
-        self.const_zeros = set()
+        self.consts = {}            # {key: is_zero}
         self.func_sigs = dict(BUILTINS)
         self.in_function = False
 
@@ -226,15 +225,21 @@ class Parser:
         return self.scope_stack[0] if self.scope_stack else "global"
 
     def enter_named_scope(self, name):
-        self.scope_stack.insert(0, name)
+        if not self.scope_stack:
+            self.scope_stack = ["global"]
+        self.scope_stack.insert(0, f"{self.scope_stack[0]}.{name}")
 
     def enter_anon_scope(self, prefix):
+        if not self.scope_stack:
+            self.scope_stack = ["global"]
         self.scope_counter += 1
-        self.scope_stack.insert(0, f"{prefix}_{self.scope_counter}")
+        self.scope_stack.insert(0, f"{self.scope_stack[0]}.{prefix}_{self.scope_counter}")
 
     def exit_scope(self):
         if len(self.scope_stack) > 1:
             self.scope_stack.pop(0)
+        elif not self.scope_stack:
+            self.scope_stack = ["global"]
 
     def symtable_lookup_scoped(self, name):
         for scope in self.scope_stack:
@@ -244,7 +249,7 @@ class Parser:
                     return (key, (t1, t2))
         return None
 
-    def symtable_insert_scoped(self, name_tok, val_tok, typ="TDynamic", is_const=False):
+    def symtable_insert_scoped(self, name_tok, val_tok, typ="TDynamic", is_const=False, is_zero=False):
         scope = self.current_scope()
         key = f"{scope}#{name_tok.val}"
         for t1, _ in self.symtable:
@@ -254,7 +259,7 @@ class Parser:
         self.symtable.insert(0, (scoped_tok, val_tok))
         self.var_types[key] = typ
         if is_const:
-            self.const_set.add(key)
+            self.consts[key] = is_zero
         return key
 
     def symtable_update_scoped(self, key, name_tok, val_tok, typ):
@@ -331,9 +336,7 @@ class Parser:
         e, val_tok = self.parse_const_val()
         self.expect('SemiColon')
         typ, is_zero = self.check_const_expr(e)
-        key = self.symtable_insert_scoped(name_tok, val_tok, typ=typ, is_const=True)
-        if is_zero:
-            self.const_zeros.add(key)
+        self.symtable_insert_scoped(name_tok, val_tok, typ=typ, is_const=True, is_zero=is_zero)
         return ('ConstDecl', name_tok.val, e)
 
     def check_const_expr(self, e):
@@ -349,9 +352,9 @@ class Parser:
             if not found:
                 raise SemanticError(f"undeclared constant '{ref}'")
             key, _ = found
-            if key not in self.const_set:
+            if key not in self.consts:
                 raise SemanticError(f"constant initializer '{ref}' is not a constant")
-            return (self.var_types.get(key, 'TDynamic'), key in self.const_zeros)
+            return (self.var_types.get(key, 'TDynamic'), self.consts[key])
         raise SemanticError("constant must be initialized with a literal or another constant")
 
     def parse_const_val(self):
@@ -510,7 +513,7 @@ class Parser:
         if v[0] == 'IndexVar':
             key, _ = self.check_var_chain(v)
             base_t = self.var_types.get(key, 'TDynamic')
-            if key in self.const_set:
+            if key in self.consts:
                 raise SemanticError(f"cannot mutate constant '{base_tok.val}'")
             if base_t == 'TString':
                 raise SemanticError(f"strings are immutable and cannot be assigned by index ('{base_tok.val}')")
@@ -520,7 +523,7 @@ class Parser:
         found = self.symtable_lookup_scoped(base_tok.val)
         if found:
             key, _ = found
-            if key in self.const_set:
+            if key in self.consts:
                 raise SemanticError(f"cannot assign to constant '{base_tok.val}'")
             cur_type = self.var_types.get(key, 'TDynamic')
             if op == 'Assign':
@@ -778,7 +781,7 @@ class Parser:
             return self.is_zero_expr(expr_node[2])
         if expr_node[0] == 'VarExpr' and expr_node[1][0] == 'SimpleVar':
             found = self.symtable_lookup_scoped(expr_node[1][1])
-            if found and found[0] in self.const_zeros:
+            if found and self.consts.get(found[0], False):
                 return True
         return False
 
@@ -1104,8 +1107,8 @@ print("Symbol Table (escopo#nome) for quickSortV1:")
 for s in p1.symtable:
     print(f"  {s[0]} -> {s[1]}")
 v1_keys = {t1.val for t1, _ in p1.symtable}
-assert "quicksort_1#lista" in v1_keys and "quicksort_1#pivo" in v1_keys
-assert "lc_2#x" in v1_keys and "lc_3#x" in v1_keys
+assert "global.quicksort_1#lista" in v1_keys and "global.quicksort_1#pivo" in v1_keys
+assert "global.quicksort_1.lc_2#x" in v1_keys and "global.quicksort_1.lc_3#x" in v1_keys
 assert "global#entrada" in v1_keys and "global#intercala_1" in v1_keys
 assert p1.symtable_lookup_scoped("x") is None, "List comprehension var 'x' leaked!"
 
@@ -1118,7 +1121,11 @@ print("Symbol Table (escopo#nome) for quickSortV2:")
 for s in p2.symtable:
     print(f"  {s[0]} -> {s[1]}")
 v2_keys = {t1.val for t1, _ in p2.symtable}
-assert "quicksort_2#arr" in v2_keys and "mergesort_2#arr" in v2_keys and "global#main" in v2_keys
+assert "global.quicksort_2#arr" in v2_keys and "global.mergesort_2#arr" in v2_keys and "global#main" in v2_keys
+assert "global.quicksort_2.if_1.for_2#j" in v2_keys
+assert "global.quicksort_2.if_1.for_2.if_3#temp" in v2_keys
+assert "global.quicksort_2.if_1#temp" in v2_keys
+assert "global.main.for_10#k" in v2_keys and "global.main.for_10#val" in v2_keys
 
 # ==================== EDGE CASE UNIT TESTS ====================
 print("\n=== RUNNING EDGE CASE TESTS ===")
@@ -1209,6 +1216,82 @@ test_cases = [
         parts = split("a b", " ");
         cfg = {"lr": 0.01};
         v = cfg["lr"];
+    """),
+    ("Deeply nested hierarchical scopes (model -> def -> if -> for -> lc)", """
+        model Net {
+            def run(xs) {
+                if (len(xs) > 0) {
+                    for (item in xs) {
+                        ys = [x for x in xs];
+                    }
+                }
+            }
+        }
+    """),
+    ("Sibling nested functions with same name (no scope collision)", """
+        def f1() {
+            def helper(x) { return x; }
+            return helper(1);
+        }
+        def f2() {
+            def helper(x) { return x; }
+            return helper(2);
+        }
+    """),
+    ("Const zero shadowed by non-zero const in inner scope", """
+        const Z = 0;
+        const Z2 = Z;
+        const NONZ = 5;
+        def safe() {
+            const Z = 2;
+            return 10 / Z;
+        }
+    """),
+    ("Nested same-name function shadows outer signature", """
+        def f(a) {
+            def f(a, b) {
+                return a + b;
+            }
+            return f(a, 1);
+        }
+        r = f(5);
+    """),
+    ("Nested traditional for loops inside function", """
+        def work() {
+            total = 0;
+            for (i = 0; i < 3; i += 1) {
+                for (j = 0; j < 2; j += 1) {
+                    total += i + j;
+                }
+            }
+            return total;
+        }
+    """),
+    ("Const in sibling if/else blocks with different zero flags", """
+        def branch(flag) {
+            if (flag) {
+                const D = 0;
+                a = D + 1;
+            } else {
+                const D = 2;
+                b = 10 / D;
+            }
+        }
+    """),
+    ("Outer zero const shadowed by param and list comprehension", """
+        const Z = 0;
+        def use_param(Z) {
+            Z = 5;
+            return 10 / Z;
+        }
+        xs = [1, 2, 3];
+        ys = [10 / Z for Z in xs];
+    """),
+    ("Nested list comprehensions inside function", """
+        def flatten_like(mat) {
+            res = [[y for y in row] for row in mat];
+            return res;
+        }
     """)
 ]
 
@@ -1217,14 +1300,73 @@ for name, code in test_cases:
         toks = scan(code)
         p = Parser(toks)
         ast = p.parse_program()
+        keys = {t1.val for t1, _ in p.symtable}
         if name == "Consecutive list comprehensions isolated scope":
             assert p.symtable_lookup_scoped("x") is None
-            keys = {t1.val for t1, _ in p.symtable}
-            assert "lc_1#x" in keys and "lc_2#x" in keys
+            assert "global.lc_1#x" in keys and "global.lc_2#x" in keys
+        elif name == "Model with subprogram and assignment":
+            assert "global#Network" in keys
+            assert "global.Network#w" in keys
+            assert "global.Network#forward" in keys
+            assert "global.Network.forward#x" in keys
+        elif name == "If-Else-If ladder":
+            assert "global.if_1#y" in keys
+            assert "global.if_2#y" in keys
+            assert "global.else_3#y" in keys
+        elif name == "Deeply nested hierarchical scopes (model -> def -> if -> for -> lc)":
+            assert "global.Net.run.if_1.for_2#item" in keys
+            assert "global.Net.run.if_1.for_2#ys" in keys
+            assert "global.Net.run.if_1.for_2.lc_3#x" in keys
+        elif name == "Sibling nested functions with same name (no scope collision)":
+            assert "global.f1#helper" in keys and "global.f1.helper#x" in keys
+            assert "global.f2#helper" in keys and "global.f2.helper#x" in keys
+        elif name == "Const zero shadowed by non-zero const in inner scope":
+            assert p.consts == {
+                "global#Z": True,
+                "global#Z2": True,
+                "global#NONZ": False,
+                "global.safe#Z": False,
+            }
+        elif name == "Enum single member":
+            assert p.consts == {"global#Single": False, "global#OnlyOne": False}
+        elif name == "Nested same-name function shadows outer signature":
+            assert "global#f" in keys and "global.f#a" in keys
+            assert "global.f#f" in keys and "global.f.f#a" in keys and "global.f.f#b" in keys
+            assert p.func_sigs["global#f"] == (1, 1, "TDynamic")
+            assert p.func_sigs["global.f#f"] == (2, 2, "TDynamic")
+        elif name == "Nested traditional for loops inside function":
+            assert "global.work#total" in keys
+            assert "global.work.for_1#i" in keys
+            assert "global.work.for_1.for_2#j" in keys
+        elif name == "Const in sibling if/else blocks with different zero flags":
+            assert p.consts == {"global.branch.if_1#D": True, "global.branch.else_2#D": False}
+        elif name == "Outer zero const shadowed by param and list comprehension":
+            assert p.consts == {"global#Z": True}
+            assert "global.use_param#Z" in keys and "global.lc_1#Z" in keys
+        elif name == "Nested list comprehensions inside function":
+            assert "global.flatten_like.lc_1#row" in keys
+            assert "global.flatten_like.lc_1.lc_2#y" in keys
         print(f"  PASS: {name} ({len(ast)} stmts, {len(p.symtable)} symbols)")
     except Exception as e:
         print(f"  FAIL: {name} -> {e}")
         sys.exit(1)
+
+# Scope stack normalization invariants (defensive empty scope_stack handling)
+p_empty = Parser([])
+p_empty.scope_stack = []
+p_empty.enter_named_scope("foo")
+assert p_empty.scope_stack == ["global.foo", "global"], f"Unexpected stack: {p_empty.scope_stack}"
+p_empty.exit_scope()
+assert p_empty.scope_stack == ["global"], f"Unexpected stack after exit: {p_empty.scope_stack}"
+p_empty.scope_stack = []
+p_empty.enter_anon_scope("if")
+assert p_empty.scope_stack == ["global.if_1", "global"], f"Unexpected anon stack: {p_empty.scope_stack}"
+p_empty.exit_scope()
+assert p_empty.scope_stack == ["global"], f"Unexpected anon stack after exit: {p_empty.scope_stack}"
+p_empty.scope_stack = []
+p_empty.exit_scope()
+assert p_empty.scope_stack == ["global"], f"Unexpected empty exit stack: {p_empty.scope_stack}"
+print("  PASS: Scope stack empty normalization invariants")
 
 print("\n=== RUNNING NEGATIVE SYNTAX TESTS (MUST REJECT) ===")
 negative_syntax_cases = [
@@ -1264,6 +1406,15 @@ negative_semantic_cases = [
     ("Duplicate const in same scope", "const DUP = 1; const DUP = 2;"),
     ("Division by zero literal", "x = 10 / 0;"),
     ("Division by zero constant", "const Z = 0; x = 10 / Z;"),
+    ("Division by chained zero constant", "const Z = 0; const Z2 = Z; x = 10 / Z2;"),
+    ("Modulo by local float zero constant", "def f() { const Z = 0.0; return 10 % Z; }"),
+    ("Division by shadowed local zero constant", "const A = 1; def f() { const A = 0; return 10 / A; }"),
+    ("Division by self-named shadowed zero constant", "const Z = 0; def f() { const Z = Z; return 10 / Z; }"),
+    ("Division by zero const in sibling else block", "def f(flag) { if (flag) { const D = 2; a = 10 / D; } else { const D = 0; b = 10 / D; } }"),
+    ("Local const does not leak outside if block", "def f() { if (true) { const C = 1; } x = C; }"),
+    ("Traditional for-loop init var does not leak outside loop", "def work() { for (i = 0; i < 3; i += 1) { x = i; } y = i; }"),
+    ("Nested same-name function arity mismatch", "def f(a) { def f(a, b) { return a + b; } return f(a); }"),
+    ("Reassign enum member", "enum Color { Red, Blue } Red = 1;"),
     ("Matrix dimension mismatch (2x3) @ (4x2)", "a = zeros(2, 3); b = ones(4, 2); c = a @ b;"),
     ("Chained matrix dimension mismatch (2x3)@(3x4)@(5x1)", "a = zeros(2, 3); b = ones(3, 4); c = zeros(5, 1); r = (a @ b) @ c;"),
     ("Matrix x vector dimension mismatch", "a = [[1, 2, 3], [4, 5, 6]]; v = [1, 2]; r = a @ v;"),
