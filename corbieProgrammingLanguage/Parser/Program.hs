@@ -5,6 +5,7 @@ import Text.Parsec
 import Parser.Types
 import Parser.Statements
 import Parser.Semantic (initialSemanticState)
+import Parser.Pretty (prettyProgram, prettySymbolTable)
 
 program :: Parser Program
 program = do
@@ -27,5 +28,5 @@ runFile filename = do
   case result of
     Left err -> print err
     Right (ast, symbols) -> do
-      print ast
-      print symbols
+      putStr (prettyProgram ast)
+      putStrLn (prettySymbolTable symbols)

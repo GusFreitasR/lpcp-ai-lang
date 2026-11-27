@@ -73,7 +73,8 @@ ghc --make parser.hs Scanner.hs -o parser.exe
 ```
 
 O ponto de entrada `parser.hs` usa os módulos em `Parser\` para tokenizar o
-arquivo informado e imprimir o resultado do parsing. Um exemplo válido de
+arquivo informado e imprimir a AST em formato de árvore, seguida pela tabela
+de símbolos em linhas legíveis. Um exemplo válido de
 programa simples é:
 
 ```text
